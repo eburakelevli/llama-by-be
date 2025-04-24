@@ -1,53 +1,122 @@
-# llama-by-be
+<div align="center">
+  <h1>llama-by-be</h1>
+  <p><strong>Local chat interface for LLaMA models via Hugging Face Transformers</strong></p>
+  <p>
+    <a href="https://github.com/YOUR_USERNAME/llama-by-be/blob/main/LICENSE">
+      <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
+    </a>
+    <a href="https://www.python.org">
+      <img src="https://img.shields.io/badge/python-3.7%2B-blue.svg" alt="Python Version">
+    </a>
+  </p>
+</div>
 
-## Local Chat Interface
+## Table of Contents
 
-This repository provides a simple command-line chat interface to run a Hugging Face causal language model (e.g., LLaMA 4) locally via Transformers.
+- [About The Project](#about-the-project)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [CLI Chat Interface](#cli-chat-interface)
+  - [Web Chat Interface](#web-chat-interface)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
-### Prerequisites
+## About The Project
 
-- Python 3.7 or newer
+A simple, open-source chat interface for local LLaMA-based models via Hugging Face Transformers. Includes:
+
+- **CLI**: `chat_llama.py`
+- **Web UI**: `web_chat_llama.py` (built with Gradio)
+
+## Features
+
+- Converse with LLaMA models entirely offline
+- Supports public & private Hugging Face models
+- Configurable sampling: `temperature`, `top_p`, `max_new_tokens`
+- Both CLI and web (Gradio) interfaces
+- Lightweight and easy to extend
+
+## Prerequisites
+
+- Python 3.7+
 - PyTorch
 - Hugging Face Transformers, Accelerate, and SentencePiece
-
-Install dependencies:
 
 ```bash
 pip install torch transformers accelerate sentencepiece
 ```
 
-### Usage
+For the web UI:
 
-1. (Optional) If you need to authenticate to access a private model, you can:
-   - Login via the Hugging Face CLI:
-     ```bash
-     huggingface-cli login
-     ```
-   - Or export your token for direct use:
-     ```bash
-     export HUGGINGFACEHUB_API_TOKEN=<YOUR_TOKEN>
-     ```
+```bash
+pip install gradio
+```
 
-2. Run the chat script, specifying the model ID or local path. If your model is private, either have logged in via `huggingface-cli` or pass the token directly:
+## Installation
 
-   ```bash
-   python chat_llama.py --model meta-llama/Llama-4-7b-chat [--token <YOUR_TOKEN>]
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/llama-by-be.git
+cd llama-by-be
+```
 
-3. Chat at the `User:` prompt. Type `exit` or `quit` to stop.
+Authenticate for private models (optional):
 
-## Web UI with Gradio
+```bash
+huggingface-cli login
+# or
+export HUGGINGFACEHUB_API_TOKEN=<YOUR_TOKEN>
+```
 
-You can also chat in your browser by running a Gradio-based web app.
+## Usage
 
-1. Install Gradio:
-   ```bash
-   pip install gradio
-   ```
+Replace `<MODEL_ID_OR_PATH>` with the desired Hugging Face model ID or local path.
 
-2. Run the web chat script:
-   ```bash
-   python web_chat_llama.py --model <MODEL_ID_OR_LOCAL_PATH> [--token <YOUR_TOKEN>] [--device cpu] [--port 7860] [--share]
-   ```
+### CLI Chat Interface
 
-3. Open your browser to http://localhost:7860 (or the public link if you used `--share`).
+```bash
+python chat_llama.py \
+  --model <MODEL_ID_OR_PATH> \
+  [--token <YOUR_TOKEN>] \
+  [--device cpu|cuda] \
+  [--max_new_tokens 256] \
+  [--temperature 0.7] \
+  [--top_p 0.9]
+```
+
+### Web Chat Interface
+
+```bash
+python web_chat_llama.py \
+  --model <MODEL_ID_OR_PATH> \
+  [--token <YOUR_TOKEN>] \
+  [--device cpu|cuda] \
+  [--port 7860] \
+  [--share]
+```
+
+Open your browser at `http://localhost:7860` (or use the public link if `--share` is set).
+
+## Contributing
+
+> Contributions, issues, and feature requests are welcome!
+
+1. Fork the project
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add AmazingFeature'`)
+4. Push to your branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+Please ensure tests and linting pass before submitting.
+
+## License
+
+This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgements
+
+- [Hugging Face Transformers](https://github.com/huggingface/transformers)
+- [Gradio](https://github.com/gradio-app/gradio)
