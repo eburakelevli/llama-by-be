@@ -98,7 +98,8 @@ def main():
 
     # launch Gradio interface
     with gr.Blocks() as demo:
-        chatbot = gr.Chatbot(label="LLaMA Chat")
+        # display the loaded model name as the chat title
+        chatbot = gr.Chatbot(label=args.model)
         user_input = gr.Textbox(show_label=False, placeholder="Type your message and press enter")
         # define callback
         def gr_respond(message, history):
