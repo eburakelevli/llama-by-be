@@ -11,6 +11,9 @@ try:
 except ImportError:
     print("Error: 'torch' library not found. Install with 'pip install torch'", file=sys.stderr)
     sys.exit(1)
+import os
+import pandas as pd
+from PyPDF2 import PdfReader
 try:
     from transformers import AutoTokenizer, AutoModelForCausalLM
 except ImportError:
@@ -38,8 +41,11 @@ def load_model(model_name, device, hf_token=None):
     model.eval()
     return tokenizer, model
 
-def build_prompt(history):
+def build_prompt(history, file_store=None):
     prompt = ""
+    if file_store:
+        for name, text in file_store:
+            prompt += f"[Content from {name}]\n{text}\n\n"
     for user, assistant in history:
         prompt += f"User: {user}\n"
         if assistant:
@@ -47,11 +53,12 @@ def build_prompt(history):
     prompt += "Assistant:"
     return prompt
 
-def respond(message, history, tokenizer, model, device, max_new_tokens, temperature, top_p):
+def respond(message, history, tokenizer, model, device, max_new_tokens, temperature, top_p, file_store=None):
     history = history or []
     # append placeholder for assistant
     history.append((message, None))
-    prompt = build_prompt(history)
+    # include any uploaded file context in the prompt
+    prompt = build_prompt(history, file_store)
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         outputs = model.generate(
@@ -100,14 +107,54 @@ def main():
     with gr.Blocks() as demo:
         # display the loaded model name as the chat title
         chatbot = gr.Chatbot(label=args.model)
+        # state to store uploaded file contents
+        file_store = gr.State([])
+        # file upload component for CSV and PDF
+        file_input = gr.File(label="Upload CSV/PDF", file_types=[".csv", ".pdf"], file_count="multiple")
+
+        def process_file(files, history, store):
+            history = history or []
+            store = store or []
+            for f in files:
+                file_path = f.name if hasattr(f, 'name') else f
+                ext = os.path.splitext(file_path)[1].lower()
+                text = ""
+                if ext == ".csv":
+                    try:
+                        df = pd.read_csv(file_path)
+                        text = df.to_csv(index=False)
+                    except Exception as e:
+                        history.append((f"Error reading CSV {file_path}", str(e)))
+                        continue
+                elif ext == ".pdf":
+                    try:
+                        reader = PdfReader(file_path)
+                        for page in reader.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text
+                    except Exception as e:
+                        history.append((f"Error reading PDF {file_path}", str(e)))
+                        continue
+                else:
+                    continue
+                store.append((os.path.basename(file_path), text))
+                history.append((f"Uploaded {os.path.basename(file_path)}", ""))
+            # clear file_input by returning None for that component
+            return history, store, None
+
+        # handle file uploads
+        file_input.upload(process_file, [file_input, chatbot, file_store], [chatbot, file_store, file_input])
+
         user_input = gr.Textbox(show_label=False, placeholder="Type your message and press enter")
-        # define callback
-        def gr_respond(message, history):
+        # define callback including file context
+        def gr_respond(message, history, store):
             return respond(
                 message, history, tokenizer, model, device,
-                args.max_new_tokens, args.temperature, args.top_p
+                args.max_new_tokens, args.temperature, args.top_p, store
             )
-        user_input.submit(gr_respond, [user_input, chatbot], [chatbot, user_input])
+        # submit text inputs with access to file_store
+        user_input.submit(gr_respond, [user_input, chatbot, file_store], [chatbot, user_input])
     demo.launch(server_name="0.0.0.0", server_port=args.port, share=args.share)
 
 if __name__ == "__main__":

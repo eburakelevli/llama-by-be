@@ -43,6 +43,8 @@ A simple, open-source chat interface for local LLaMA-based models via Hugging Fa
 
 - Python 3.7+
 - PyTorch
+- pandas
+- PyPDF2
 - Hugging Face Transformers, Accelerate, and SentencePiece
 
 ```bash
@@ -52,7 +54,7 @@ pip install torch transformers accelerate sentencepiece
 For the web UI:
 
 ```bash
-pip install gradio
+pip install gradio pandas PyPDF2
 ```
 
 ## Installation
@@ -99,6 +101,8 @@ python web_chat_llama.py \
 ```
 
 Open your browser at `http://localhost:7860` (or use the public link if `--share` is set).
+
+- Now supports uploading CSV or PDF files: click the “Upload CSV/PDF” button to attach files, and their contents will be included in your chat context.
 
 ## Contributing
 
