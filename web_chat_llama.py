@@ -32,33 +32,45 @@ def load_model(model_name, device, hf_token=None):
         low_cpu_mem_usage=True
     )
     if hf_token:
-        params['use_auth_token'] = hf_token
+        # use the new 'token' parameter (use_auth_token is deprecated)
+        params['token'] = hf_token
     print(f"Loading model '{model_name}' on {device}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False, **({'use_auth_token': hf_token} if hf_token else {}))
+    # pass HF token using 'token' (use_auth_token deprecated)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        use_fast=False,
+        **({'token': hf_token} if hf_token else {})
+    )
     model = AutoModelForCausalLM.from_pretrained(model_name, **params)
-    if device == "cpu":
-        model.to("cpu")
+    # Move model to appropriate device (mps or cpu)
+    if device in ("cpu", "mps"):
+        model.to(device)
     model.eval()
     return tokenizer, model
 
 def build_prompt(history, file_store=None):
     prompt = ""
+    # include any uploaded file contents first
     if file_store:
         for name, text in file_store:
             prompt += f"[Content from {name}]\n{text}\n\n"
-    for user, assistant in history:
-        prompt += f"User: {user}\n"
-        if assistant:
-            prompt += f"Assistant: {assistant}\n"
+    # build convo from history of dict messages
+    for msg in history:
+        role = msg.get('role')
+        content = msg.get('content', '')
+        if role == 'user':
+            prompt += f"User: {content}\n"
+        elif role == 'assistant':
+            prompt += f"Assistant: {content}\n"
     prompt += "Assistant:"
     return prompt
 
 def respond(message, history, tokenizer, model, device, max_new_tokens, temperature, top_p, file_store=None):
+    # history is a list of dicts with 'role' and 'content'
     history = history or []
-    # append placeholder for assistant
-    history.append((message, None))
-    # include any uploaded file context in the prompt
-    prompt = build_prompt(history, file_store)
+    # include the new user message in prompt history
+    prompt_history = history + [{"role": "user", "content": message}]
+    prompt = build_prompt(prompt_history, file_store)
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         outputs = model.generate(
@@ -69,22 +81,23 @@ def respond(message, history, tokenizer, model, device, max_new_tokens, temperat
             do_sample=True,
             pad_token_id=tokenizer.eos_token_id
         )
-    # extract generated tokens
     gen_tokens = outputs[0][inputs.input_ids.shape[-1]:]
     text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
-    # remove any trailing user prompts
     if "\nUser:" in text:
         text = text.split("\nUser:")[0].strip()
-    # update history
-    history[-1] = (message, text)
-    return history, ""
+    # update history with user message and assistant response
+    new_history = history + [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": text}
+    ]
+    return new_history, ""
 
 def main():
     parser = argparse.ArgumentParser(description="Web chat with a local Hugging Face model via Gradio")
     parser.add_argument("-m", "--model", required=True,
                         help="Model ID or local path (e.g., meta-llama/Llama-4-7b-chat)")
-    parser.add_argument("--device", choices=["cpu", "cuda"],
-                        help="Device to run on (default: cuda if available else cpu)")
+    parser.add_argument("--device", choices=["cpu", "cuda", "mps"],
+                        help="Device to run on (default: mps if available, else cuda if available, else cpu)")
     parser.add_argument("--max_new_tokens", type=int, default=256,
                         help="Max tokens to generate per response")
     parser.add_argument("--temperature", type=float, default=0.7,
@@ -98,7 +111,16 @@ def main():
                         help="Create a public link for the Gradio app")
     args = parser.parse_args()
 
-    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    # Determine device: prefer user-specified, else mps > cuda > cpu
+    if args.device:
+        device = args.device
+    else:
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
     hf_token = args.token if args.token else None
 
     tokenizer, model = load_model(args.model, device, hf_token)
@@ -106,7 +128,8 @@ def main():
     # launch Gradio interface
     with gr.Blocks() as demo:
         # display the loaded model name as the chat title
-        chatbot = gr.Chatbot(label=args.model)
+        # use 'messages' format (openai-style dicts) for chat history
+        chatbot = gr.Chatbot(label=args.model, type='messages')
         # state to store uploaded file contents
         file_store = gr.State([])
         # file upload component for CSV and PDF
@@ -124,7 +147,8 @@ def main():
                         df = pd.read_csv(file_path)
                         text = df.to_csv(index=False)
                     except Exception as e:
-                        history.append((f"Error reading CSV {file_path}", str(e)))
+                        # record error as assistant message
+                        history.append({"role": "assistant", "content": f"Error reading CSV {file_path}: {e}"})
                         continue
                 elif ext == ".pdf":
                     try:
@@ -134,12 +158,14 @@ def main():
                             if page_text:
                                 text += page_text
                     except Exception as e:
-                        history.append((f"Error reading PDF {file_path}", str(e)))
+                        history.append({"role": "assistant", "content": f"Error reading PDF {file_path}: {e}"})
                         continue
                 else:
                     continue
-                store.append((os.path.basename(file_path), text))
-                history.append((f"Uploaded {os.path.basename(file_path)}", ""))
+                basename = os.path.basename(file_path)
+                store.append((basename, text))
+                # acknowledge upload as assistant message
+                history.append({"role": "assistant", "content": f"Uploaded {basename}"})
             # clear file_input by returning None for that component
             return history, store, None
 

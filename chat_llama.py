@@ -21,8 +21,8 @@ def main():
     parser = argparse.ArgumentParser(description="Chat with a local Hugging Face model via Transformers")
     parser.add_argument("-m", "--model", required=True,
                         help="Model ID or local path (e.g., meta-llama/Llama-4-7b-chat)")
-    parser.add_argument("--device", choices=["cpu", "cuda"],
-                        help="Device to run on (default: cuda if available else cpu)")
+    parser.add_argument("--device", choices=["cpu", "cuda", "mps"],
+                        help="Device to run on (default: mps if available, else cuda if available, else cpu)")
     parser.add_argument("--max_new_tokens", type=int, default=256,
                         help="Max tokens to generate per response")
     parser.add_argument("--temperature", type=float, default=0.7,
@@ -37,7 +37,16 @@ def main():
     # Determine auth token: use explicit token or CLI login token
     auth_token = hf_token if hf_token else True
 
-    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    # Determine device: prefer user-specified, else mps > cuda > cpu
+    if args.device:
+        device = args.device
+    else:
+        if torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
     print(f"Loading model '{args.model}' on {device}..." )
     try:
         tokenizer = AutoTokenizer.from_pretrained(
@@ -52,8 +61,9 @@ def main():
             low_cpu_mem_usage=True,
             use_auth_token=auth_token
         )
-        if device == "cpu":
-            model.to("cpu")
+        # Move model to appropriate device (mps or cpu)
+        if device in ("cpu", "mps"):
+            model.to(device)
     except Exception as e:
         print(f"Error loading model: {e}", file=sys.stderr)
         sys.exit(1)

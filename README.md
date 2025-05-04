@@ -61,7 +61,7 @@ pip install gradio pandas PyPDF2
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/llama-by-be.git
+git clone https://github.com/eburakelevli/llama-by-be.git
 cd llama-by-be
 ```
 
@@ -83,7 +83,7 @@ Replace `<MODEL_ID_OR_PATH>` with the desired Hugging Face model ID or local pat
 python chat_llama.py \
   --model <MODEL_ID_OR_PATH> \
   [--token <YOUR_TOKEN>] \
-  [--device cpu|cuda] \
+  [--device cpu|cuda|mps] \
   [--max_new_tokens 256] \
   [--temperature 0.7] \
   [--top_p 0.9]
