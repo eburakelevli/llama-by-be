@@ -1,6 +1,6 @@
 <div align="center">
   <h1>llama-by-be</h1>
-  <p><strong>Local chat interface for LLaMA models via Hugging Face Transformers</strong></p>
+  <p><strong>Local chat interface for LLaMA models via Hugging Face Transformers (supports any Hugging Face Transformers model)</strong></p>
   <p>
     <a href="https://github.com/eburakelevli/llama-by-be/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
@@ -26,7 +26,7 @@
 
 ## About The Project
 
-A simple, open-source chat interface for local LLaMA-based models via Hugging Face Transformers. Includes:
+A simple, open-source chat interface for local models via Hugging Face Transformers (demonstrated with LLaMA models, but compatible with any Transformers model). Includes:
 
 - **CLI**: `chat_llama.py`
 - **Web UI**: `web_chat_llama.py` (built with Gradio)
