@@ -2,7 +2,7 @@
   <h1>llama-by-be</h1>
   <p><strong>Local chat interface for LLaMA models via Hugging Face Transformers</strong></p>
   <p>
-    <a href="https://github.com/YOUR_USERNAME/llama-by-be/blob/main/LICENSE">
+    <a href="https://github.com/eburakelevli/llama-by-be/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
     </a>
     <a href="https://www.python.org">
