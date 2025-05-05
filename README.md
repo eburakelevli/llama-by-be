@@ -95,7 +95,7 @@ python chat_llama.py \
 python web_chat_llama.py \
   --model <MODEL_ID_OR_PATH> \
   [--token <YOUR_TOKEN>] \
-  [--device cpu|cuda] \
+  [--device cpu|cuda|mps] \
   [--port 7860] \
   [--share]
 ```
