@@ -38,6 +38,8 @@ A simple, open-source chat interface for local models via Hugging Face Transform
 - Configurable sampling: `temperature`, `top_p`, `max_new_tokens`
 - Both CLI and web (Gradio) interfaces
 - Lightweight and easy to extend
+- NEW: Now supports uploading CSV or PDF files for Web Chat Interface: click the “Upload CSV/PDF” button to attach files, and their contents will be included in your chat context.
+
 
 ## Prerequisites
 
@@ -102,7 +104,6 @@ python web_chat_llama.py \
 
 Open your browser at `http://localhost:7860` (or use the public link if `--share` is set).
 
-- Now supports uploading CSV or PDF files: click the “Upload CSV/PDF” button to attach files, and their contents will be included in your chat context.
 
 ## Contributing
 
