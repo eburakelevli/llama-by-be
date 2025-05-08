@@ -20,6 +20,7 @@
 - [Usage](#usage)
   - [CLI Chat Interface](#cli-chat-interface)
   - [Web Chat Interface](#web-chat-interface)
+  - [Google Sign-In Integration](#google-sign-in-integration)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
@@ -103,6 +104,43 @@ python web_chat_llama.py \
 ```
 
 Open your browser at `http://localhost:7860` (or use the public link if `--share` is set).
+
+### Google Sign-In Integration
+
+Follow these steps to enable Google Sign-In in the Web Chat interface:
+
+1. Create OAuth 2.0 Client ID:
+    - Go to the Google Cloud Console: https://console.cloud.google.com/apis/credentials
+    - Select your project or create a new one.
+    - Enable the "Google Identity Services" API.
+    - Click "Create Credentials" > "OAuth client ID".
+    - Choose "Web application" and set the following:
+        - Authorized JavaScript origins: http://localhost:7860
+        - Authorized redirect URIs: http://localhost:7860/api/auth/google
+    - Click "Create" and copy the **Client ID** and **Client Secret**.
+
+2. Set environment variables:
+```bash
+export GOOGLE_CLIENT_ID="YOUR_CLIENT_ID"
+export GOOGLE_CLIENT_SECRET="YOUR_CLIENT_SECRET"
+export OAUTH_REDIRECT_URI="http://localhost:7860/api/auth/google"
+```
+
+3. Install required dependencies (if not already installed):
+```bash
+pip install google-auth fastapi uvicorn
+```
+
+4. Run the Web Chat with Google Sign-In support:
+```bash
+python web_chat_llama_google_signin_test.py \
+  --model <MODEL_ID_OR_PATH> \
+  [--device cpu|cuda|mps] \
+  [--port 7860] \
+  [--token <YOUR_HF_TOKEN>]
+```
+
+Open your browser at `http://localhost:7860` and click the Google Sign-In button to authenticate before chatting.
 
 
 ## Contributing
