@@ -20,6 +20,7 @@
 - [Usage](#usage)
   - [CLI Chat Interface](#cli-chat-interface)
   - [Web Chat Interface](#web-chat-interface)
+  - [Optional: S3-based Model Storage](#optional-s3-based-model-storage)
   - [Google Sign-In Integration](#google-sign-in-integration)
 - [Contributing](#contributing)
 - [License](#license)
@@ -48,6 +49,7 @@ A simple, open-source chat interface for local models via Hugging Face Transform
 - PyTorch
 - pandas
 - PyPDF2
+- boto3 (for S3 storage functionality)
 - Hugging Face Transformers, Accelerate, and SentencePiece
 
 ```bash
@@ -57,7 +59,7 @@ pip install torch transformers accelerate sentencepiece
 For the web UI:
 
 ```bash
-pip install gradio pandas PyPDF2
+pip install gradio pandas PyPDF2 boto3
 ```
 
 ## Installation
@@ -102,6 +104,60 @@ python web_chat_llama.py \
   [--port 7860] \
   [--share]
 ```
+
+### Optional: S3-based Model Storage
+
+You can optionally store and synchronize your model weights using AWS S3. This is useful for large models that you don’t want to bundle in your repository or local disk.
+
+1. Configure your AWS environment variables (never commit these to source control):
+
+   ```bash
+   export AWS_ACCESS_KEY_ID="your_access_key_id"
+   export AWS_SECRET_ACCESS_KEY="your_secret_access_key"
+   export AWS_DEFAULT_REGION="your_bucket_region"
+   export S3_BUCKET_NAME="your_bucket_name"
+   ```
+
+2. Install required libraries:
+
+   ```bash
+   pip install boto3 huggingface-hub
+   ```
+
+3. Usage modes:
+
+   - Download-only (load from S3 into a local folder, default: `models/<prefix>`):
+
+     ```bash
+     python web_chat_llama.py \
+       --s3-model-prefix <YOUR_S3_MODEL_PREFIX> \
+       [--download-dir <LOCAL_DIR>] \
+       [--device cpu|cuda|mps] \
+       [--port 7860]
+     ```
+
+   - Upload-only (push a local directory or HF hub model to S3 under `<S3_UPLOAD_PREFIX>`):
+
+     ```bash
+     python web_chat_llama.py \
+       --model <MODEL_ID_OR_LOCAL_PATH> \
+       --upload-to-s3 \
+       [--s3-upload-prefix <S3_UPLOAD_PREFIX>]
+     ```
+
+   - Sync-if-missing (first check S3, download if present; otherwise upload, then load):
+
+     ```bash
+     python web_chat_llama.py \
+       --model <MODEL_ID_OR_LOCAL_PATH> \
+       --s3-model-prefix <YOUR_S3_MODEL_PREFIX> \
+       --upload-to-s3 \
+       [--download-dir <LOCAL_DIR>] \
+       [--device cpu|cuda|mps] \
+       [--port 7860]
+     ```
+
+4. Default behavior (no S3 flags) is to load directly from `--model` (Hugging Face hub ID or local path).
 
 Open your browser at `http://localhost:7860` (or use the public link if `--share` is set).
 

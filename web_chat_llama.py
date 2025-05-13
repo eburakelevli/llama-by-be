@@ -109,7 +109,131 @@ def main():
                         help="Port for the Gradio server")
     parser.add_argument("--share", action="store_true",
                         help="Create a public link for the Gradio app")
+    parser.add_argument("--s3-model-prefix",
+                        help="S3 prefix or key for the model (object key for archive or prefix for model directory). Requires S3_BUCKET_NAME env var")
+    parser.add_argument("--download-dir",
+                        help="Local directory to download model from S3 (default: models/<prefix>)")
+    parser.add_argument("--upload-to-s3", action="store_true",
+                        help="Upload model from Hugging Face or local path to S3 bucket")
+    parser.add_argument("--s3-upload-prefix",
+                        help="S3 key prefix under which to upload the model (defaults to model name)")
     args = parser.parse_args()
+
+    # Handle S3 <-> local model sync/upload/download
+    if args.upload_to_s3 or args.s3_model_prefix:
+        bucket_name = os.environ.get("S3_BUCKET_NAME")
+        if not bucket_name:
+            print("Error: S3 operation requires S3_BUCKET_NAME env var", file=sys.stderr)
+            sys.exit(1)
+        try:
+            import boto3
+        except ImportError:
+            print("Error: boto3 is required for S3 operations. Install with 'pip install boto3'", file=sys.stderr)
+            sys.exit(1)
+        s3 = boto3.client(
+            "s3",
+            region_name=os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+        )
+        # Sync logic: if both upload and download flags are set
+        if args.upload_to_s3 and args.s3_model_prefix:
+            prefix = args.s3_model_prefix
+            # Check if model exists in S3
+            exists = False
+            res = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
+            if res.get('KeyCount', 0) > 0 or res.get('Contents'):
+                exists = True
+            if exists:
+                # download existing model
+                print(f"Model found in S3 at prefix '{prefix}', downloading...", file=sys.stderr)
+                # reuse download logic
+                # Determine local dir
+                if args.download_dir:
+                    local_model_dir = args.download_dir
+                else:
+                    base = os.path.basename(prefix.rstrip("/"))
+                    local_model_dir = os.path.join("models", base)
+                if os.path.exists(local_model_dir):
+                    print(f"Local model directory {local_model_dir} already exists, skipping download.", file=sys.stderr)
+                else:
+                    # download objects
+                    os.makedirs(local_model_dir, exist_ok=True)
+                    paginator = s3.get_paginator("list_objects_v2")
+                    for result in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+                        for obj in result.get("Contents", []):
+                            key = obj["Key"]
+                            rel = os.path.relpath(key, prefix)
+                            dest = os.path.join(local_model_dir, rel)
+                            os.makedirs(os.path.dirname(dest), exist_ok=True)
+                            print(f"Downloading s3://{bucket_name}/{key} to {dest}", file=sys.stderr)
+                            s3.download_file(bucket_name, key, dest)
+                args.model = local_model_dir
+            else:
+                # upload local or HF model to S3
+                print(f"Model not found in S3 at prefix '{prefix}', uploading...", file=sys.stderr)
+                # get local model dir
+                if os.path.isdir(args.model):
+                    local_model_dir = args.model
+                else:
+                    try:
+                        from huggingface_hub import snapshot_download
+                    except ImportError:
+                        print("Error: huggingface_hub is required to download model. Install with 'pip install huggingface-hub'", file=sys.stderr)
+                        sys.exit(1)
+                    local_model_dir = snapshot_download(repo_id=args.model, token=args.token)
+                upload_prefix = args.s3_upload_prefix or prefix
+                for root, _, files in os.walk(local_model_dir):
+                    for fname in files:
+                        full = os.path.join(root, fname)
+                        rel = os.path.relpath(full, local_model_dir)
+                        key = f"{upload_prefix}/{rel}".replace(os.sep, "/")
+                        print(f"Uploading {full} -> s3://{bucket_name}/{key}", file=sys.stderr)
+                        s3.upload_file(full, bucket_name, key)
+                args.model = local_model_dir
+        elif args.s3_model_prefix:
+            # download-only
+            prefix = args.s3_model_prefix
+            if args.download_dir:
+                local_model_dir = args.download_dir
+            else:
+                base = os.path.basename(prefix.rstrip("/"))
+                local_model_dir = os.path.join("models", base)
+            if os.path.exists(local_model_dir):
+                print(f"Local model directory {local_model_dir} already exists, skipping download.", file=sys.stderr)
+            else:
+                os.makedirs(local_model_dir, exist_ok=True)
+                paginator = s3.get_paginator("list_objects_v2")
+                for result in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+                    for obj in result.get("Contents", []):
+                        key = obj["Key"]
+                        rel = os.path.relpath(key, prefix)
+                        dest = os.path.join(local_model_dir, rel)
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        print(f"Downloading s3://{bucket_name}/{key} to {dest}", file=sys.stderr)
+                        s3.download_file(bucket_name, key, dest)
+            args.model = local_model_dir
+        elif args.upload_to_s3:
+            # upload-only
+            # get local model dir
+            if os.path.isdir(args.model):
+                local_model_dir = args.model
+            else:
+                try:
+                    from huggingface_hub import snapshot_download
+                except ImportError:
+                    print("Error: huggingface_hub is required to download model. Install with 'pip install huggingface-hub'", file=sys.stderr)
+                    sys.exit(1)
+                local_model_dir = snapshot_download(repo_id=args.model, token=args.token)
+            upload_prefix = args.s3_upload_prefix or os.path.basename(local_model_dir.rstrip("/"))
+            for root, _, files in os.walk(local_model_dir):
+                for fname in files:
+                    full = os.path.join(root, fname)
+                    rel = os.path.relpath(full, local_model_dir)
+                    key = f"{upload_prefix}/{rel}".replace(os.sep, "/")
+                    print(f"Uploading {full} -> s3://{bucket_name}/{key}", file=sys.stderr)
+                    s3.upload_file(full, bucket_name, key)
+            print("Upload complete.", file=sys.stderr)
+            sys.exit(0)
+
 
     # Determine device: prefer user-specified, else mps > cuda > cpu
     if args.device:
