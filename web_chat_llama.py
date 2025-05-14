@@ -117,7 +117,23 @@ def main():
                         help="Upload model from Hugging Face or local path to S3 bucket")
     parser.add_argument("--s3-upload-prefix",
                         help="S3 key prefix under which to upload the model (defaults to model name)")
+    parser.add_argument("--sagemaker-endpoint-name", dest="sagemaker_endpoint_name",
+                        help="SageMaker endpoint name for inference. If set, skips local model and calls SageMaker endpoint.")
     args = parser.parse_args()
+    # Check for optional SageMaker endpoint (use SAGEMAKER_ENDPOINT_NAME env var)
+    endpoint_name = args.sagemaker_endpoint_name or os.environ.get("SAGEMAKER_ENDPOINT_NAME")
+    if endpoint_name:
+        try:
+            import boto3
+        except ImportError:
+            print("Error: 'boto3' library not found. Install with 'pip install boto3'", file=sys.stderr)
+            sys.exit(1)
+        import json
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        client = boto3.client("sagemaker-runtime", region_name=region)
+        use_sagemaker = True
+    else:
+        use_sagemaker = False
 
     # Handle S3 <-> local model sync/upload/download
     if args.upload_to_s3 or args.s3_model_prefix:
@@ -235,19 +251,25 @@ def main():
             sys.exit(0)
 
 
-    # Determine device: prefer user-specified, else mps > cuda > cpu
-    if args.device:
-        device = args.device
-    else:
-        if torch.backends.mps.is_available():
-            device = "mps"
-        elif torch.cuda.is_available():
-            device = "cuda"
+    # Initialize local model unless using SageMaker endpoint
+    if not use_sagemaker:
+        # Determine device: prefer user-specified, else mps > cuda > cpu
+        if args.device:
+            device = args.device
         else:
-            device = "cpu"
-    hf_token = args.token if args.token else None
-
-    tokenizer, model = load_model(args.model, device, hf_token)
+            if torch.backends.mps.is_available():
+                device = "mps"
+            elif torch.cuda.is_available():
+                device = "cuda"
+            else:
+                device = "cpu"
+        hf_token = args.token if args.token else None
+        tokenizer, model = load_model(args.model, device, hf_token)
+    else:
+        # Will use SageMaker endpoint for inference
+        tokenizer = None
+        model = None
+        device = None
 
     # launch Gradio interface
     with gr.Blocks() as demo:
@@ -297,12 +319,44 @@ def main():
         file_input.upload(process_file, [file_input, chatbot, file_store], [chatbot, file_store, file_input])
 
         user_input = gr.Textbox(show_label=False, placeholder="Type your message and press enter")
-        # define callback including file context
-        def gr_respond(message, history, store):
-            return respond(
-                message, history, tokenizer, model, device,
-                args.max_new_tokens, args.temperature, args.top_p, store
-            )
+        # define callback including file context (choose SageMaker or local inference)
+        if use_sagemaker:
+            def gr_respond(message, history, store):
+                history = history or []
+                store = store or []
+                prompt_history = history + [{"role": "user", "content": message}]
+                prompt = build_prompt(prompt_history, store)
+                payload = {"inputs": prompt}
+                response = client.invoke_endpoint(
+                    EndpointName=endpoint_name,
+                    ContentType="application/json",
+                    Body=json.dumps(payload)
+                )
+                body = response["Body"].read()
+                try:
+                    decoded = body.decode("utf-8")
+                except AttributeError:
+                    decoded = body
+                data = json.loads(decoded)
+                if isinstance(data, list) and data:
+                    text = data[0].get("generated_text", "")
+                elif isinstance(data, dict):
+                    text = data.get("generated_text", "")
+                else:
+                    text = ""
+                if "\nUser:" in text:
+                    text = text.split("\nUser:")[0].strip()
+                new_history = history + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": text}
+                ]
+                return new_history, ""
+        else:
+            def gr_respond(message, history, store):
+                return respond(
+                    message, history, tokenizer, model, device,
+                    args.max_new_tokens, args.temperature, args.top_p, store
+                )
         # submit text inputs with access to file_store
         user_input.submit(gr_respond, [user_input, chatbot, file_store], [chatbot, user_input])
     demo.launch(server_name="0.0.0.0", server_port=args.port, share=args.share)

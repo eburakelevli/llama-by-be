@@ -101,9 +101,10 @@ python web_chat_llama.py \
   --model <MODEL_ID_OR_PATH> \
   [--token <YOUR_TOKEN>] \
   [--device cpu|cuda|mps] \
+  [--sagemaker-endpoint-name <ENDPOINT_NAME>] \
   [--port 7860] \
   [--share]
-```
+``` 
 
 ### Optional: S3-based Model Storage
 
