@@ -105,6 +105,44 @@ python web_chat_llama.py \
   [--port 7860] \
   [--share]
 ``` 
+ 
+### SageMaker Inference
+
+You can route inference calls to a deployed AWS SageMaker endpoint instead of loading a local model on your machine.
+
+1. Export your AWS credentials and preferred region:
+
+   ```bash
+   export AWS_ACCESS_KEY_ID="your_access_key_id"
+   export AWS_SECRET_ACCESS_KEY="your_secret_access_key"
+   export AWS_DEFAULT_REGION="your_aws_region"
+   ```
+
+2. Export your SageMaker endpoint name (or pass via the `--sagemaker-endpoint-name` flag):
+
+   ```bash
+   export SAGEMAKER_ENDPOINT_NAME="your_sagemaker_endpoint_name"
+   ```
+
+3. Install the AWS SDK for Python (`boto3`) if not already present:
+
+   ```bash
+   pip install boto3
+   ```
+
+4. Launch the web chat application, specifying your SageMaker endpoint:
+
+   ```bash
+   python web_chat_llama.py \
+     --model <MODEL_ID_OR_PATH> \
+     --sagemaker-endpoint-name $SAGEMAKER_ENDPOINT_NAME \
+     [--token <YOUR_TOKEN>] \
+     [--device cpu|cuda|mps] \
+     [--port 7860] \
+     [--share]
+   ```
+
+When the `--sagemaker-endpoint-name` flag or `SAGEMAKER_ENDPOINT_NAME` environment variable is set, the script skips local model loading and forwards each chat request to your SageMaker endpoint for inference.
 
 ### Optional: S3-based Model Storage
 
