@@ -92,10 +92,33 @@ def respond(message, history, tokenizer, model, device, max_new_tokens, temperat
     ]
     return new_history, ""
 
+def setup_aws_credentials():
+    """Set up AWS credentials either from environment variables or user input."""
+    # Check existing credentials
+    aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
+    aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+    aws_region = os.environ.get('AWS_DEFAULT_REGION')
+
+    if not all([aws_access_key_id, aws_secret_access_key, aws_region]):
+        print("\nAWS credentials not found in environment. Please enter them now:")
+        if not aws_access_key_id:
+            aws_access_key_id = input("AWS Access Key ID: ").strip()
+        if not aws_secret_access_key:
+            aws_secret_access_key = input("AWS Secret Access Key: ").strip()
+        if not aws_region:
+            aws_region = input("AWS Region (default: eu-west-1): ").strip() or "eu-west-1"
+        
+        # Set the credentials in environment
+        os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key_id
+        os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_access_key
+        os.environ['AWS_DEFAULT_REGION'] = aws_region
+
+    return aws_access_key_id, aws_secret_access_key, aws_region
+
 def main():
     parser = argparse.ArgumentParser(description="Web chat with a local Hugging Face model via Gradio")
-    parser.add_argument("-m", "--model", required=True,
-                        help="Model ID or local path (e.g., meta-llama/Llama-4-7b-chat)")
+    parser.add_argument("-m", "--model",
+                        help="Model ID or local path (e.g., meta-llama/Llama-4-7b-chat). Required unless using SageMaker endpoint.")
     parser.add_argument("--device", choices=["cpu", "cuda", "mps"],
                         help="Device to run on (default: mps if available, else cuda if available, else cpu)")
     parser.add_argument("--max_new_tokens", type=int, default=256,
@@ -120,8 +143,14 @@ def main():
     parser.add_argument("--sagemaker-endpoint-name", dest="sagemaker_endpoint_name",
                         help="SageMaker endpoint name for inference. If set, skips local model and calls SageMaker endpoint.")
     args = parser.parse_args()
+    
     # Check for optional SageMaker endpoint (use SAGEMAKER_ENDPOINT_NAME env var)
     endpoint_name = args.sagemaker_endpoint_name or os.environ.get("SAGEMAKER_ENDPOINT_NAME")
+    
+    # Validate arguments
+    if not endpoint_name and not args.model:
+        parser.error("--model is required when not using a SageMaker endpoint")
+
     if endpoint_name:
         try:
             import boto3
@@ -129,12 +158,25 @@ def main():
             print("Error: 'boto3' library not found. Install with 'pip install boto3'", file=sys.stderr)
             sys.exit(1)
         import json
+        
+        # Set up AWS credentials
+        aws_access_key_id, aws_secret_access_key, aws_region = setup_aws_credentials()
+        
+        # Create the SageMaker client with explicit credentials
+        client = boto3.client(
+            "sagemaker-runtime",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=aws_region
+        )
+        
+        print(f"\nUsing SageMaker endpoint: {endpoint_name}")
+        print(f"AWS Region: {aws_region}")
         # DEBUG: Print AWS environment variables
         print(f"[DEBUG] Environment variables:")
         print(f"AWS_ACCESS_KEY_ID={os.environ.get('AWS_ACCESS_KEY_ID', 'not set')}")
         print(f"AWS_SECRET_ACCESS_KEY={os.environ.get('AWS_SECRET_ACCESS_KEY', 'not set')[:4]}... (if set)")
         print(f"AWS_DEFAULT_REGION={os.environ.get('AWS_DEFAULT_REGION', 'not set')}")
-        client = boto3.client("sagemaker-runtime")
         use_sagemaker = True
     else:
         use_sagemaker = False
