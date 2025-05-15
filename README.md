@@ -119,31 +119,43 @@ You can route inference calls to a deployed AWS SageMaker endpoint instead of lo
    export AWS_DEFAULT_REGION="your_aws_region"
    ```
 
-2. Export your SageMaker endpoint name (or pass via the `--sagemaker-endpoint-name` flag):
+2. Launch the web chat application with your SageMaker endpoint:
 
+   Option 1 - Using environment variable:
    ```bash
    export SAGEMAKER_ENDPOINT_NAME="your_sagemaker_endpoint_name"
+   python web_chat_llama.py --port 7860
    ```
 
-3. Install the AWS SDK for Python (`boto3`) if not already present:
-
-   ```bash
-   pip install boto3
-   ```
-
-4. Launch the web chat application, specifying your SageMaker endpoint:
-
+   Option 2 - Using command line flag:
    ```bash
    python web_chat_llama.py \
-     --model <MODEL_ID_OR_PATH> \
-     --sagemaker-endpoint-name $SAGEMAKER_ENDPOINT_NAME \
-     [--token <YOUR_TOKEN>] \
-     [--device cpu|cuda|mps] \
-     [--port 7860] \
-     [--share]
+     --sagemaker-endpoint-name your_sagemaker_endpoint_name \
+     --port 7860
    ```
 
-When the `--sagemaker-endpoint-name` flag or `SAGEMAKER_ENDPOINT_NAME` environment variable is set, the script skips local model loading and forwards each chat request to your SageMaker endpoint for inference.
+   Note: When using a SageMaker endpoint, the `--model` parameter is optional since the model is already deployed at the endpoint.
+
+### Setting up AWS Credentials
+
+Ensure you have the necessary AWS credentials and permissions:
+- IAM user with SageMaker invoke endpoint permissions
+- Properly configured AWS credentials
+- Correct region where your SageMaker endpoint is deployed
+
+### Using SageMaker Endpoints
+
+The script supports inference through SageMaker endpoints. You can:
+- Use existing endpoints
+- Specify custom endpoint names
+- Configure inference parameters
+
+### Troubleshooting
+
+Common issues and solutions:
+- Invalid signature errors: Check AWS credentials and system time
+- Endpoint not found: Verify endpoint name and region
+- Permission denied: Check IAM policies
 
 ### Optional: S3-based Model Storage
 
