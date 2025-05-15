@@ -20,6 +20,7 @@
 - [Usage](#usage)
   - [CLI Chat Interface](#cli-chat-interface)
   - [Web Chat Interface](#web-chat-interface)
+  - [SageMaker Inference](#sagemaker-inference)
   - [Optional: S3-based Model Storage](#optional-s3-based-model-storage)
   - [Google Sign-In Integration](#google-sign-in-integration)
 - [Contributing](#contributing)
@@ -40,7 +41,7 @@ A simple, open-source chat interface for local models via Hugging Face Transform
 - Configurable sampling: `temperature`, `top_p`, `max_new_tokens`
 - Both CLI and web (Gradio) interfaces
 - Lightweight and easy to extend
-- NEW: Now supports uploading CSV or PDF files for Web Chat Interface: click the “Upload CSV/PDF” button to attach files, and their contents will be included in your chat context.
+- NEW: Now supports uploading CSV or PDF files for Web Chat Interface: click the "Upload CSV/PDF" button to attach files, and their contents will be included in your chat context.
 
 
 ## Prerequisites
@@ -146,7 +147,7 @@ When the `--sagemaker-endpoint-name` flag or `SAGEMAKER_ENDPOINT_NAME` environme
 
 ### Optional: S3-based Model Storage
 
-You can optionally store and synchronize your model weights using AWS S3. This is useful for large models that you don’t want to bundle in your repository or local disk.
+You can optionally store and synchronize your model weights using AWS S3. This is useful for large models that you don't want to bundle in your repository or local disk.
 
 1. Configure your AWS environment variables (never commit these to source control):
 
