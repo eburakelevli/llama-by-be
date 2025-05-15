@@ -97,7 +97,7 @@ def setup_aws_credentials():
     # Check existing credentials
     aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
     aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
-    aws_region = os.environ.get('AWS_DEFAULT_REGION')
+    aws_region = os.environ.get('AWS_DEFAULT_REGION') or os.environ.get('AWS_REGION')
 
     if not all([aws_access_key_id, aws_secret_access_key, aws_region]):
         print("\nAWS credentials not found in environment. Please enter them now:")
@@ -373,25 +373,57 @@ def main():
                 prompt_history = history + [{"role": "user", "content": message}]
                 prompt = build_prompt(prompt_history, store)
                 payload = {"inputs": prompt}
-                response = client.invoke_endpoint(
-                    EndpointName=endpoint_name,
-                    ContentType="application/json",
-                    Body=json.dumps(payload)
-                )
-                body = response["Body"].read()
+                
                 try:
-                    decoded = body.decode("utf-8")
-                except AttributeError:
-                    decoded = body
-                data = json.loads(decoded)
-                if isinstance(data, list) and data:
-                    text = data[0].get("generated_text", "")
-                elif isinstance(data, dict):
-                    text = data.get("generated_text", "")
-                else:
-                    text = ""
+                    response = client.invoke_endpoint(
+                        EndpointName=endpoint_name,
+                        ContentType="application/json",
+                        Body=json.dumps(payload)
+                    )
+                    body = response["Body"].read()
+                    try:
+                        decoded = body.decode("utf-8")
+                    except AttributeError:
+                        decoded = body
+                    
+                    try:
+                        data = json.loads(decoded)
+                    except json.JSONDecodeError as e:
+                        error_msg = f"Error decoding response from SageMaker endpoint: {str(e)}"
+                        print(error_msg, file=sys.stderr)
+                        new_history = history + [
+                            {"role": "user", "content": message},
+                            {"role": "assistant", "content": error_msg}
+                        ]
+                        return new_history, ""
+                    
+                    # Handle different response formats
+                    if isinstance(data, list) and data:
+                        text = data[0].get("generated_text", "")
+                    elif isinstance(data, dict):
+                        # Try different common response formats
+                        text = (
+                            data.get("generated_text") or
+                            data.get("response") or
+                            data.get("text") or
+                            data.get("output") or
+                            ""
+                        )
+                    else:
+                        text = str(data)
+                        
+                except Exception as e:
+                    error_msg = f"Error calling SageMaker endpoint: {str(e)}"
+                    print(error_msg, file=sys.stderr)
+                    new_history = history + [
+                        {"role": "user", "content": message},
+                        {"role": "assistant", "content": error_msg}
+                    ]
+                    return new_history, ""
+                
                 if "\nUser:" in text:
                     text = text.split("\nUser:")[0].strip()
+                
                 new_history = history + [
                     {"role": "user", "content": message},
                     {"role": "assistant", "content": text}
