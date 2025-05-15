@@ -129,8 +129,12 @@ def main():
             print("Error: 'boto3' library not found. Install with 'pip install boto3'", file=sys.stderr)
             sys.exit(1)
         import json
-        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-        client = boto3.client("sagemaker-runtime", region_name=region)
+        # DEBUG: Print AWS environment variables
+        print(f"[DEBUG] Environment variables:")
+        print(f"AWS_ACCESS_KEY_ID={os.environ.get('AWS_ACCESS_KEY_ID', 'not set')}")
+        print(f"AWS_SECRET_ACCESS_KEY={os.environ.get('AWS_SECRET_ACCESS_KEY', 'not set')[:4]}... (if set)")
+        print(f"AWS_DEFAULT_REGION={os.environ.get('AWS_DEFAULT_REGION', 'not set')}")
+        client = boto3.client("sagemaker-runtime")
         use_sagemaker = True
     else:
         use_sagemaker = False
