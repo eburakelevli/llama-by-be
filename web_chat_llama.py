@@ -103,15 +103,19 @@ def setup_aws_credentials():
         print("\nAWS credentials not found in environment. Please enter them now:")
         if not aws_access_key_id:
             aws_access_key_id = input("AWS Access Key ID: ").strip()
+            os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key_id
         if not aws_secret_access_key:
             aws_secret_access_key = input("AWS Secret Access Key: ").strip()
+            os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_access_key
         if not aws_region:
             aws_region = input("AWS Region (default: eu-west-1): ").strip() or "eu-west-1"
-        
-        # Set the credentials in environment
-        os.environ['AWS_ACCESS_KEY_ID'] = aws_access_key_id
-        os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secret_access_key
-        os.environ['AWS_DEFAULT_REGION'] = aws_region
+            os.environ['AWS_DEFAULT_REGION'] = aws_region
+    
+    # Print debug info for credentials
+    print(f"\nUsing AWS credentials:")
+    print(f"  Access Key ID: {aws_access_key_id[:4]}... (masked for security)")
+    print(f"  Secret Access Key: {aws_secret_access_key[:4]}... (masked for security)")
+    print(f"  Region: {aws_region}")
 
     return aws_access_key_id, aws_secret_access_key, aws_region
 
@@ -162,21 +166,106 @@ def main():
         # Set up AWS credentials
         aws_access_key_id, aws_secret_access_key, aws_region = setup_aws_credentials()
         
-        # Create the SageMaker client with explicit credentials
-        client = boto3.client(
-            "sagemaker-runtime",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region
-        )
+        # Import for subprocess call and temp files
+        import subprocess
+        import tempfile
+        
+        def invoke_sagemaker_endpoint(endpoint_name, payload, region, access_key, secret_key):
+            """
+            Invoke a SageMaker endpoint using the AWS CLI directly.
+            This bypasses all signature issues by delegating to the AWS CLI.
+            """
+            # Set environment variables for AWS CLI
+            # Start with a clean environment or a copy of os.environ, 
+            # then explicitly set what the CLI needs.
+            env = os.environ.copy()
+            env['AWS_ACCESS_KEY_ID'] = access_key
+            env['AWS_SECRET_ACCESS_KEY'] = secret_key
+            env['AWS_DEFAULT_REGION'] = region
+
+            # If AWS_SESSION_TOKEN is in the parent environment, make sure it's passed.
+            # This is crucial if the access_key/secret_key are temporary credentials.
+            if 'AWS_SESSION_TOKEN' in os.environ:
+                env['AWS_SESSION_TOKEN'] = os.environ['AWS_SESSION_TOKEN']
+            elif 'AWS_SESSION_TOKEN' in env: # If it was in the copied env but not explicitly set above
+                del env['AWS_SESSION_TOKEN'] # Remove it if we don't have a fresh one from os.environ
+                                             # and are using long-term keys from input.
+
+            # Attempt to prevent AWS CLI from using profiles or other local AWS config files.
+            # For Darwin (macOS), /dev/null should work.
+            env['AWS_CONFIG_FILE'] = '/dev/null'
+            env['AWS_SHARED_CREDENTIALS_FILE'] = '/dev/null'
+            
+            # Unset AWS_PROFILE to further ensure no profile is used by the CLI.
+            if 'AWS_PROFILE' in env:
+                del env['AWS_PROFILE']
+            
+            # Create a temporary file for the payload
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as temp:
+                temp_path = temp.name
+                json.dump(payload, temp)
+            
+            output_path = "" # Initialize to prevent reference before assignment in finally
+            try:
+                # Create a temporary file for output
+                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as outfile:
+                    output_path = outfile.name
+                
+                # Build the AWS CLI command
+                cmd = [
+                    "aws", "sagemaker-runtime", "invoke-endpoint",
+                    "--endpoint-name", endpoint_name,
+                    "--content-type", "application/json",
+                    "--body", f"fileb://{temp_path}",
+                    #"--debug", # Uncomment for verbose AWS CLI debugging
+                    output_path 
+                ]
+                
+                # Remove --output json as it's not needed if specifying outfile path directly
+                # and was causing issues with the outfile argument parsing for invoke-endpoint.
+                # The output to the file is implicitly JSON for this command if not specified otherwise.
+
+                print(f"Executing: {' '.join(cmd)}")
+                print(f"CLI Environment AWS_ACCESS_KEY_ID: {env.get('AWS_ACCESS_KEY_ID', 'Not Set')[:4]}...")
+                print(f"CLI Environment AWS_SECRET_ACCESS_KEY: {env.get('AWS_SECRET_ACCESS_KEY', 'Not Set')[:4]}...")
+                print(f"CLI Environment AWS_SESSION_TOKEN: {'Present' if env.get('AWS_SESSION_TOKEN') else 'Not Present'}")
+                print(f"CLI Environment AWS_DEFAULT_REGION: {env.get('AWS_DEFAULT_REGION', 'Not Set')}")
+                print(f"CLI Environment AWS_CONFIG_FILE: {env.get('AWS_CONFIG_FILE')}")
+                print(f"CLI Environment AWS_SHARED_CREDENTIALS_FILE: {env.get('AWS_SHARED_CREDENTIALS_FILE')}")
+                print(f"CLI Environment AWS_PROFILE: {env.get('AWS_PROFILE', 'Not Set')}")
+
+                # Call AWS CLI and capture output
+                result = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                
+                # Read the output file
+                with open(output_path, 'r') as f:
+                    response_body = f.read()
+                
+                # Parse the response
+                try:
+                    response_data = json.loads(response_body)
+                    return response_data
+                except json.JSONDecodeError:
+                    return {"response": response_body}
+                
+            except subprocess.CalledProcessError as e:
+                error_msg = f"AWS CLI error: {e}. STDERR: {e.stderr} STDOUT: {e.stdout}"
+                print(f"Error: {error_msg}", file=sys.stderr)
+                raise RuntimeError(error_msg)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                if output_path and os.path.exists(output_path):
+                    os.unlink(output_path)
         
         print(f"\nUsing SageMaker endpoint: {endpoint_name}")
         print(f"AWS Region: {aws_region}")
-        # DEBUG: Print AWS environment variables
-        print(f"[DEBUG] Environment variables:")
-        print(f"AWS_ACCESS_KEY_ID={os.environ.get('AWS_ACCESS_KEY_ID', 'not set')}")
-        print(f"AWS_SECRET_ACCESS_KEY={os.environ.get('AWS_SECRET_ACCESS_KEY', 'not set')[:4]}... (if set)")
-        print(f"AWS_DEFAULT_REGION={os.environ.get('AWS_DEFAULT_REGION', 'not set')}")
         use_sagemaker = True
     else:
         use_sagemaker = False
@@ -375,42 +464,21 @@ def main():
                 payload = {"inputs": prompt}
                 
                 try:
-                    response = client.invoke_endpoint(
-                        EndpointName=endpoint_name,
-                        ContentType="application/json",
-                        Body=json.dumps(payload)
-                    )
-                    body = response["Body"].read()
-                    try:
-                        decoded = body.decode("utf-8")
-                    except AttributeError:
-                        decoded = body
-                    
-                    try:
-                        data = json.loads(decoded)
-                    except json.JSONDecodeError as e:
-                        error_msg = f"Error decoding response from SageMaker endpoint: {str(e)}"
-                        print(error_msg, file=sys.stderr)
-                        new_history = history + [
-                            {"role": "user", "content": message},
-                            {"role": "assistant", "content": error_msg}
-                        ]
-                        return new_history, ""
-                    
+                    response = invoke_sagemaker_endpoint(endpoint_name, payload, aws_region, aws_access_key_id, aws_secret_access_key)
                     # Handle different response formats
-                    if isinstance(data, list) and data:
-                        text = data[0].get("generated_text", "")
-                    elif isinstance(data, dict):
+                    if isinstance(response, list) and response:
+                        text = response[0].get("generated_text", "")
+                    elif isinstance(response, dict):
                         # Try different common response formats
                         text = (
-                            data.get("generated_text") or
-                            data.get("response") or
-                            data.get("text") or
-                            data.get("output") or
+                            response.get("generated_text") or
+                            response.get("response") or
+                            response.get("text") or
+                            response.get("output") or
                             ""
                         )
                     else:
-                        text = str(data)
+                        text = str(response)
                         
                 except Exception as e:
                     error_msg = f"Error calling SageMaker endpoint: {str(e)}"
