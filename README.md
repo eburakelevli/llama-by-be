@@ -23,6 +23,9 @@
   - [Optional: SageMaker Inference](#sagemaker-inference)
   - [Optional: S3-based Model Storage](#optional-s3-based-model-storage)
   - [Optional: Google Sign-In Integration](#google-sign-in-integration)
+- [SageMaker Model Files](#sagemaker-model-files)
+  - [inference.py](#inferencepy)
+  - [Test Points](#test-points)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
@@ -250,6 +253,49 @@ python web_chat_llama_google_signin_test.py \
 
 Open your browser at `http://localhost:7860` and click the Google Sign-In button to authenticate before chatting.
 
+## SageMaker Model Files
+
+### inference.py
+This file contains the core inference code used by AWS SageMaker to serve the LLaMA model. It defines four essential functions that SageMaker requires:
+
+1. `model_fn(model_dir, context=None)`:
+   - Loads the model and tokenizer from the model directory
+   - Uses float16 for better performance
+   - Automatically handles device placement
+   - Returns a dictionary containing both model and tokenizer
+
+2. `input_fn(request_body, request_content_type)`:
+   - Processes incoming requests
+   - Handles JSON input format
+   - Validates content type
+
+3. `predict_fn(input_data, model_dict)`:
+   - Generates model responses
+   - Uses the following generation parameters:
+     - max_new_tokens: 256
+     - temperature: 0.7
+     - top_p: 0.9
+     - do_sample: True
+   - Returns generated text in a format compatible with the web chat interface
+
+4. `output_fn(prediction, response_content_type)`:
+   - Formats the model's output
+   - Returns JSON response
+
+This file is used in the SageMaker model package (`model.tar.gz`) and is essential for the endpoint to function correctly.
+
+### Test Points
+The test points file contains example prompts and expected responses used to verify the model's behavior. These test cases help ensure:
+- Model loading works correctly
+- Tokenizer processes input properly
+- Generation parameters produce expected results
+- Response formatting is correct
+
+To use these files with SageMaker:
+1. Place `inference.py` in the `model/code/` directory
+2. Create a model package: `tar -czf model.tar.gz -C model .`
+3. Upload to S3: `aws s3 cp model.tar.gz s3://your-bucket/model.tar.gz`
+4. Create/update SageMaker model using the container: `763104351884.dkr.ecr.eu-west-1.amazonaws.com/huggingface-pytorch-inference:2.3.0-transformers4.48.0-gpu-py311-cu121-ubuntu22.04-v2.2`
 
 ## Contributing
 

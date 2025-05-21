@@ -146,6 +146,12 @@ def main():
                         help="S3 key prefix under which to upload the model (defaults to model name)")
     parser.add_argument("--sagemaker-endpoint-name", dest="sagemaker_endpoint_name",
                         help="SageMaker endpoint name for inference. If set, skips local model and calls SageMaker endpoint.")
+    parser.add_argument("--cli-read-timeout", type=int, default=300,
+                        help="Timeout in seconds for SageMaker endpoint read operations (default: 300)")
+    parser.add_argument("--cli-connect-timeout", type=int, default=60,
+                        help="Timeout in seconds for SageMaker endpoint connection (default: 60)")
+    parser.add_argument("--subprocess-timeout", type=int, default=360,
+                        help="Timeout in seconds for the entire subprocess (default: 360)")
     args = parser.parse_args()
     
     # Check for optional SageMaker endpoint (use SAGEMAKER_ENDPOINT_NAME env var)
@@ -217,7 +223,8 @@ def main():
                     "--endpoint-name", endpoint_name,
                     "--content-type", "application/json",
                     "--body", f"fileb://{temp_path}",
-                    #"--debug", # Uncomment for verbose AWS CLI debugging
+                    "--cli-read-timeout", str(args.cli_read_timeout),
+                    "--cli-connect-timeout", str(args.cli_connect_timeout),
                     output_path 
                 ]
                 
@@ -240,7 +247,8 @@ def main():
                     env=env,
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    timeout=args.subprocess_timeout
                 )
                 
                 # Read the output file
@@ -254,6 +262,10 @@ def main():
                 except json.JSONDecodeError:
                     return {"response": response_body}
                 
+            except subprocess.TimeoutExpired as e:
+                error_msg = f"AWS CLI timeout after {args.subprocess_timeout} seconds: {e}. STDERR: {e.stderr if hasattr(e, 'stderr') else 'No stderr'} STDOUT: {e.stdout if hasattr(e, 'stdout') else 'No stdout'}"
+                print(f"Error: {error_msg}", file=sys.stderr)
+                raise RuntimeError(error_msg)
             except subprocess.CalledProcessError as e:
                 error_msg = f"AWS CLI error: {e}. STDERR: {e.stderr} STDOUT: {e.stdout}"
                 print(f"Error: {error_msg}", file=sys.stderr)
