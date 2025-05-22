@@ -255,7 +255,7 @@ Open your browser at `http://localhost:7860` and click the Google Sign-In button
 
 ## SageMaker Model Files
 
-### inference.py
+### llama_inference.py
 This file contains the core inference code used by AWS SageMaker to serve the LLaMA model. It defines four essential functions that SageMaker requires:
 
 1. `model_fn(model_dir, context=None)`:
