@@ -24,7 +24,7 @@
   - [Optional: S3-based Model Storage](#optional-s3-based-model-storage)
   - [Optional: Google Sign-In Integration](#google-sign-in-integration)
 - [SageMaker Model Files](#sagemaker-model-files)
-  - [inference.py](#inferencepy)
+  - [llama_inference.py](#inferencepy)
   - [Test Points](#test-points)
 - [Contributing](#contributing)
 - [License](#license)
