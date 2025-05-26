@@ -7,6 +7,7 @@ import sys
 import argparse
 import os
 import json
+import urllib.parse
 
 # Essential imports needed for both local and SageMaker modes
 try:
@@ -114,40 +115,40 @@ def setup_aws_credentials():
 
     return aws_access_key_id, aws_secret_access_key, aws_region
 
-def invoke_sagemaker_endpoint(endpoint_name, payload, region, access_key, secret_key):
-    """
-    Invoke a SageMaker endpoint using boto3.
-    """
+def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=None, secret_key=None):
+    """Invoke SageMaker endpoint using boto3."""
     try:
-        # Create a SageMaker runtime client
-        runtime = boto3.client(
-            'sagemaker-runtime',
-            region_name=region,
+        # Ensure credentials are properly decoded if they were URL-encoded
+        if access_key:
+            access_key = urllib.parse.unquote(access_key)
+        if secret_key:
+            secret_key = urllib.parse.unquote(secret_key)
+            
+        # Create boto3 client with explicit credentials
+        session = boto3.Session(
             aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key
+            aws_secret_access_key=secret_key,
+            region_name=region
         )
+        sagemaker_runtime = session.client('sagemaker-runtime')
         
         # Convert payload to JSON string
         payload_json = json.dumps(payload)
         
-        # Invoke the endpoint
-        response = runtime.invoke_endpoint(
+        # Invoke endpoint
+        response = sagemaker_runtime.invoke_endpoint(
             EndpointName=endpoint_name,
             ContentType='application/json',
             Body=payload_json
         )
         
-        # Parse the response
+        # Parse response
         response_body = response['Body'].read().decode('utf-8')
-        try:
-            return json.loads(response_body)
-        except json.JSONDecodeError:
-            return {"response": response_body}
-            
+        return json.loads(response_body)
+        
     except Exception as e:
-        error_msg = f"Error calling SageMaker endpoint: {str(e)}"
-        print(error_msg, file=sys.stderr)
-        raise RuntimeError(error_msg)
+        print(f"Error calling SageMaker endpoint: {str(e)}", file=sys.stderr)
+        raise
 
 def main():
     parser = argparse.ArgumentParser(description="Web chat with a local Hugging Face model via Gradio")
