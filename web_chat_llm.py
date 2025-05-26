@@ -12,6 +12,7 @@ import boto3
 import botocore
 import datetime
 import hashlib
+import hmac
 
 # Essential imports needed for both local and SageMaker modes
 try:
@@ -142,31 +143,6 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         print(f"AWS Secret Key length: {len(aws_secret_key) if aws_secret_key else 0}", file=sys.stderr)
         print(f"AWS Region: {aws_region}", file=sys.stderr)
 
-        # Create a custom session with explicit configuration
-        session = boto3.Session(
-            aws_access_key_id=aws_access_key,
-            aws_secret_access_key=aws_secret_key,
-            region_name=aws_region
-        )
-
-        # Create client with explicit SigV4 configuration
-        config = botocore.config.Config(
-            signature_version='s3v4',
-            s3={'addressing_style': 'path'},
-            retries = dict(
-                max_attempts = 3
-            )
-        )
-
-        # Create the SageMaker runtime client with explicit endpoint URL
-        endpoint_url = f"https://runtime.sagemaker.{aws_region}.amazonaws.com"
-        sagemaker_runtime = session.client(
-            'sagemaker-runtime',
-            config=config,
-            endpoint_url=endpoint_url,
-            verify=True  # Ensure SSL verification
-        )
-
         # Format the payload according to the endpoint's expectations
         formatted_payload = {
             "inputs": payload["inputs"],
@@ -181,43 +157,91 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         # Convert payload to JSON string and calculate SHA256
         payload_json = json.dumps(formatted_payload)
         payload_bytes = payload_json.encode('utf-8')
+        content_sha256 = hashlib.sha256(payload_bytes).hexdigest()
         
-        # Create a custom request with explicit headers
+        # Create timestamp for request
+        amz_date = datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+        date_stamp = amz_date[:8]
+        
+        # Create canonical request
+        canonical_uri = f'/endpoints/{endpoint_name}/invocations'
+        canonical_querystring = ''
+        canonical_headers = (
+            f'accept:application/json\n'
+            f'content-type:application/json\n'
+            f'host:runtime.sagemaker.{aws_region}.amazonaws.com\n'
+            f'x-amz-content-sha256:{content_sha256}\n'
+            f'x-amz-date:{amz_date}\n'
+        )
+        signed_headers = 'accept;content-type;host;x-amz-content-sha256;x-amz-date'
+        canonical_request = (
+            f'POST\n'
+            f'{canonical_uri}\n'
+            f'{canonical_querystring}\n'
+            f'{canonical_headers}\n'
+            f'{signed_headers}\n'
+            f'{content_sha256}'
+        )
+        
+        # Create string to sign
+        algorithm = 'AWS4-HMAC-SHA256'
+        credential_scope = f'{date_stamp}/{aws_region}/sagemaker/aws4_request'
+        string_to_sign = (
+            f'{algorithm}\n'
+            f'{amz_date}\n'
+            f'{credential_scope}\n'
+            f'{hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()}'
+        )
+        
+        # Calculate signing key
+        def sign(key, msg):
+            return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+        
+        k_date = sign(('AWS4' + aws_secret_key).encode('utf-8'), date_stamp)
+        k_region = sign(k_date, aws_region)
+        k_service = sign(k_region, 'sagemaker')
+        k_signing = sign(k_service, 'aws4_request')
+        
+        # Calculate signature
+        signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        # Create authorization header
+        authorization_header = (
+            f'{algorithm} '
+            f'Credential={aws_access_key}/{credential_scope}, '
+            f'SignedHeaders={signed_headers}, '
+            f'Signature={signature}'
+        )
+        
+        # Create request headers
         headers = {
-            'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'X-Amz-Date': datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
-            'X-Amz-Content-Sha256': hashlib.sha256(payload_bytes).hexdigest()
+            'Content-Type': 'application/json',
+            'X-Amz-Date': amz_date,
+            'X-Amz-Content-Sha256': content_sha256,
+            'Authorization': authorization_header,
+            'Host': f'runtime.sagemaker.{aws_region}.amazonaws.com'
         }
-
+        
         # Print request details for debugging (without sensitive info)
         print(f"\nMaking request to endpoint: {endpoint_name}", file=sys.stderr)
         print(f"Region: {aws_region}", file=sys.stderr)
-        print(f"Endpoint URL: {endpoint_url}", file=sys.stderr)
-        print(f"Request headers: {headers}", file=sys.stderr)
+        print(f"Endpoint URL: https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}", file=sys.stderr)
+        print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
+        print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
+        print(f"Request headers (without Authorization): {dict((k,v) for k,v in headers.items() if k != 'Authorization')}", file=sys.stderr)
         print(f"Request payload: {payload_json}", file=sys.stderr)
 
-        # Create a custom request
-        request = botocore.awsrequest.AWSRequest(
-            method='POST',
-            url=f"{endpoint_url}/endpoints/{endpoint_name}/invocations",
-            data=payload_bytes,
-            headers=headers
+        # Make the request using requests library
+        import requests
+        response = requests.post(
+            f'https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}',
+            headers=headers,
+            data=payload_bytes
         )
-
-        # Sign the request
-        credentials = botocore.credentials.Credentials(
-            access_key=aws_access_key,
-            secret_key=aws_secret_key
-        )
-        signer = botocore.auth.SigV4Auth(credentials, 'sagemaker', aws_region)
-        signer.add_auth(request)
-
-        # Send the request
-        response = sagemaker_runtime._endpoint.http_session.send(request.prepare())
         
         if response.status_code != 200:
-            error_body = response.content.decode('utf-8')
+            error_body = response.text
             print(f"Error response: {error_body}", file=sys.stderr)
             raise botocore.exceptions.ClientError(
                 error_response={'Error': {'Code': 'InvokeEndpointError', 'Message': error_body}},
@@ -225,7 +249,7 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             )
 
         # Parse response
-        response_body = response.content.decode('utf-8')
+        response_body = response.text
         print(f"Raw response: {response_body}", file=sys.stderr)
         return json.loads(response_body)
 
@@ -238,7 +262,8 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             print(f"Access Key ID: {aws_access_key[:4]}...", file=sys.stderr)
             print(f"Secret Key length: {len(aws_secret_key)}", file=sys.stderr)
             print(f"Region: {aws_region}", file=sys.stderr)
-            print(f"Endpoint URL: {endpoint_url}", file=sys.stderr)
+            print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
+            print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
             print("\nPlease verify:", file=sys.stderr)
             print("1. AWS credentials are correctly set in Heroku config vars", file=sys.stderr)
             print("2. The credentials have permissions to invoke the SageMaker endpoint", file=sys.stderr)
