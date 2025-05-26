@@ -5,44 +5,38 @@ Supports conversational chat with any compatible model (e.g., LLaMA 4).
 """
 import sys
 import argparse
-
-try:
-    import torch
-except ImportError:
-    print("Error: 'torch' library not found. Install with 'pip install torch'", file=sys.stderr)
-    sys.exit(1)
 import os
-import pandas as pd
-from PyPDF2 import PdfReader
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-except ImportError:
-    print("Error: 'transformers' library not found. Install with 'pip install transformers accelerate sentencepiece'", file=sys.stderr)
-    sys.exit(1)
+
+# Essential imports needed for both local and SageMaker modes
 try:
     import gradio as gr
-except ImportError:
-    print("Error: 'gradio' library not found. Install with 'pip install gradio'", file=sys.stderr)
+    import pandas as pd
+    from PyPDF2 import PdfReader
+except ImportError as e:
+    print(f"Error: Required library not found: {e}", file=sys.stderr)
     sys.exit(1)
 
+# Only import torch if not using SageMaker endpoint
+torch = None
+transformers = None
+
 def load_model(model_name, device, hf_token=None):
+    if not torch or not transformers:
+        raise RuntimeError("PyTorch and Transformers are required for local model inference")
     params = dict(
         device_map="auto" if device == "cuda" else None,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         low_cpu_mem_usage=True
     )
     if hf_token:
-        # use the new 'token' parameter (use_auth_token is deprecated)
         params['token'] = hf_token
     print(f"Loading model '{model_name}' on {device}...")
-    # pass HF token using 'token' (use_auth_token deprecated)
-    tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
         use_fast=False,
         **({'token': hf_token} if hf_token else {})
     )
-    model = AutoModelForCausalLM.from_pretrained(model_name, **params)
-    # Move model to appropriate device (mps or cpu)
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_name, **params)
     if device in ("cpu", "mps"):
         model.to(device)
     model.eval()
@@ -66,9 +60,9 @@ def build_prompt(history, file_store=None):
     return prompt
 
 def respond(message, history, tokenizer, model, device, max_new_tokens, temperature, top_p, file_store=None):
-    # history is a list of dicts with 'role' and 'content'
+    if not torch:
+        raise RuntimeError("PyTorch is required for local model inference")
     history = history or []
-    # include the new user message in prompt history
     prompt_history = history + [{"role": "user", "content": message}]
     prompt = build_prompt(prompt_history, file_store)
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -85,7 +79,6 @@ def respond(message, history, tokenizer, model, device, max_new_tokens, temperat
     text = tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
     if "\nUser:" in text:
         text = text.split("\nUser:")[0].strip()
-    # update history with user message and assistant response
     new_history = history + [
         {"role": "user", "content": message},
         {"role": "assistant", "content": text}
@@ -400,6 +393,9 @@ def main():
 
     # Initialize local model unless using SageMaker endpoint
     if not use_sagemaker:
+        if not args.model:
+            print("Error: --model is required when not using SageMaker endpoint", file=sys.stderr)
+            sys.exit(1)
         # Determine device: prefer user-specified, else mps > cuda > cpu
         if args.device:
             device = args.device
