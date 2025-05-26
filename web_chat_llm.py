@@ -10,6 +10,8 @@ import json
 import urllib.parse
 import boto3
 import botocore
+import datetime
+import hashlib
 
 # Essential imports needed for both local and SageMaker modes
 try:
@@ -126,31 +128,19 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         print(f"botocore version: {botocore.__version__}", file=sys.stderr)
         print(f"Running on Heroku: {'DYNO' in os.environ}", file=sys.stderr)
         
-        # Try to get credentials from the AWS credential provider chain
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        
-        if credentials:
-            # Use credentials from the provider chain
-            aws_access_key = credentials.access_key
-            aws_secret_key = credentials.secret_key
-            aws_region = session.region_name or os.environ.get('AWS_DEFAULT_REGION', '').strip()
-            print("Using credentials from AWS credential provider chain", file=sys.stderr)
-        else:
-            # Fall back to environment variables
-            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
-            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
-            aws_region = os.environ.get('AWS_DEFAULT_REGION', '').strip()
-            print("Using credentials from environment variables", file=sys.stderr)
+        # Get credentials from environment variables only (more reliable on Heroku)
+        aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
+        aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
+        aws_region = os.environ.get('AWS_DEFAULT_REGION', '').strip()
+
+        if not all([aws_access_key, aws_secret_key, aws_region]):
+            raise ValueError("Missing required AWS credentials in environment variables")
 
         # Print credential information (safely)
         print("\nCredential Information:", file=sys.stderr)
         print(f"AWS Access Key ID (first 4 chars): {aws_access_key[:4] if aws_access_key else 'None'}", file=sys.stderr)
         print(f"AWS Secret Key length: {len(aws_secret_key) if aws_secret_key else 0}", file=sys.stderr)
         print(f"AWS Region: {aws_region}", file=sys.stderr)
-
-        if not all([aws_access_key, aws_secret_key, aws_region]):
-            raise ValueError("Missing required AWS credentials")
 
         # Create a custom session with explicit configuration
         session = boto3.Session(
@@ -159,9 +149,10 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             region_name=aws_region
         )
 
-        # Create client with explicit configuration
+        # Create client with explicit SigV4 configuration
         config = botocore.config.Config(
             signature_version='s3v4',
+            s3={'addressing_style': 'path'},
             retries = dict(
                 max_attempts = 3
             )
@@ -187,26 +178,55 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             }
         }
         
-        # Convert payload to JSON string
+        # Convert payload to JSON string and calculate SHA256
         payload_json = json.dumps(formatted_payload)
+        payload_bytes = payload_json.encode('utf-8')
+        
+        # Create a custom request with explicit headers
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Amz-Date': datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ'),
+            'X-Amz-Content-Sha256': hashlib.sha256(payload_bytes).hexdigest()
+        }
 
         # Print request details for debugging (without sensitive info)
         print(f"\nMaking request to endpoint: {endpoint_name}", file=sys.stderr)
         print(f"Region: {aws_region}", file=sys.stderr)
         print(f"Endpoint URL: {endpoint_url}", file=sys.stderr)
+        print(f"Request headers: {headers}", file=sys.stderr)
         print(f"Request payload: {payload_json}", file=sys.stderr)
 
-        # Invoke endpoint with explicit content type and headers
-        response = sagemaker_runtime.invoke_endpoint(
-            EndpointName=endpoint_name,
-            ContentType='application/json',
-            Accept='application/json',
-            Body=payload_json.encode('utf-8')  # Ensure proper encoding
+        # Create a custom request
+        request = botocore.awsrequest.AWSRequest(
+            method='POST',
+            url=f"{endpoint_url}/endpoints/{endpoint_name}/invocations",
+            data=payload_bytes,
+            headers=headers
         )
 
+        # Sign the request
+        credentials = botocore.credentials.Credentials(
+            access_key=aws_access_key,
+            secret_key=aws_secret_key
+        )
+        signer = botocore.auth.SigV4Auth(credentials, 'sagemaker', aws_region)
+        signer.add_auth(request)
+
+        # Send the request
+        response = sagemaker_runtime._endpoint.http_session.send(request.prepare())
+        
+        if response.status_code != 200:
+            error_body = response.content.decode('utf-8')
+            print(f"Error response: {error_body}", file=sys.stderr)
+            raise botocore.exceptions.ClientError(
+                error_response={'Error': {'Code': 'InvokeEndpointError', 'Message': error_body}},
+                operation_name='InvokeEndpoint'
+            )
+
         # Parse response
-        response_body = response['Body'].read().decode('utf-8')
-        print(f"Raw response: {response_body}", file=sys.stderr)  # Debug print
+        response_body = response.content.decode('utf-8')
+        print(f"Raw response: {response_body}", file=sys.stderr)
         return json.loads(response_body)
 
     except botocore.exceptions.ClientError as e:
@@ -224,6 +244,7 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             print("2. The credentials have permissions to invoke the SageMaker endpoint", file=sys.stderr)
             print("3. The region matches the endpoint's region", file=sys.stderr)
             print("4. The credentials are properly formatted (no extra spaces or newlines)", file=sys.stderr)
+            print("5. The request headers match the canonical string", file=sys.stderr)
         elif error_code == 'ModelError':
             print("\nModel Error Details:", file=sys.stderr)
             print("This usually means the request format doesn't match what the model expects.", file=sys.stderr)
