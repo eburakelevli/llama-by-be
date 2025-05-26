@@ -166,16 +166,25 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         # Create canonical request
         canonical_uri = f'/endpoints/{endpoint_name}/invocations'
         canonical_querystring = ''
-        canonical_headers = (
-            f'accept:application/json\n'
-            f'content-type:application/json\n'
-            f'host:runtime.sagemaker.{aws_region}.amazonaws.com\n'
-            f'x-amz-content-sha256:{content_sha256}\n'
-            f'x-amz-date:{amz_date}\n'
-        )
-        signed_headers = 'accept;content-type;host;x-amz-content-sha256;x-amz-date'
+        
+        # Headers must be in alphabetical order
+        headers = {
+            'accept': 'application/json',
+            'content-type': 'application/json',
+            'host': f'runtime.sagemaker.{aws_region}.amazonaws.com',
+            'x-amz-content-sha256': content_sha256,
+            'x-amz-date': amz_date
+        }
+        
+        # Create canonical headers (must be in alphabetical order)
+        canonical_headers = '\n'.join(f'{k}:{v}' for k, v in sorted(headers.items())) + '\n'
+        
+        # Create signed headers (must be in alphabetical order)
+        signed_headers = ';'.join(sorted(headers.keys()))
+        
+        # Create canonical request
         canonical_request = (
-            f'POST\n'
+            'POST\n'
             f'{canonical_uri}\n'
             f'{canonical_querystring}\n'
             f'{canonical_headers}\n'
@@ -213,15 +222,8 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             f'Signature={signature}'
         )
         
-        # Create request headers
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-Amz-Date': amz_date,
-            'X-Amz-Content-Sha256': content_sha256,
-            'Authorization': authorization_header,
-            'Host': f'runtime.sagemaker.{aws_region}.amazonaws.com'
-        }
+        # Add authorization header to headers
+        headers['authorization'] = authorization_header
         
         # Print request details for debugging (without sensitive info)
         print(f"\nMaking request to endpoint: {endpoint_name}", file=sys.stderr)
@@ -229,8 +231,13 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         print(f"Endpoint URL: https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}", file=sys.stderr)
         print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
         print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
-        print(f"Request headers (without Authorization): {dict((k,v) for k,v in headers.items() if k != 'Authorization')}", file=sys.stderr)
+        print(f"Request headers (without Authorization): {dict((k,v) for k,v in headers.items() if k != 'authorization')}", file=sys.stderr)
         print(f"Request payload: {payload_json}", file=sys.stderr)
+        print(f"Content SHA256: {content_sha256}", file=sys.stderr)
+        print(f"Date Stamp: {date_stamp}", file=sys.stderr)
+        print(f"AMZ Date: {amz_date}", file=sys.stderr)
+        print(f"Credential Scope: {credential_scope}", file=sys.stderr)
+        print(f"Signed Headers: {signed_headers}", file=sys.stderr)
 
         # Make the request using requests library
         import requests
@@ -243,6 +250,13 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         if response.status_code != 200:
             error_body = response.text
             print(f"Error response: {error_body}", file=sys.stderr)
+            if 'Canonical String' in error_body and 'String-to-Sign' in error_body:
+                print("\nAWS Expected Values:", file=sys.stderr)
+                print(f"AWS Expected Canonical String:\n{error_body.split('Canonical String for this request should have been')[1].split('String-to-Sign')[0].strip()}", file=sys.stderr)
+                print(f"AWS Expected String-to-Sign:\n{error_body.split('String-to-Sign should have been')[1].split('}')[0].strip()}", file=sys.stderr)
+                print("\nOur Calculated Values:", file=sys.stderr)
+                print(f"Our Canonical String:\n{canonical_request}", file=sys.stderr)
+                print(f"Our String-to-Sign:\n{string_to_sign}", file=sys.stderr)
             raise botocore.exceptions.ClientError(
                 error_response={'Error': {'Code': 'InvokeEndpointError', 'Message': error_body}},
                 operation_name='InvokeEndpoint'
