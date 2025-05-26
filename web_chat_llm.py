@@ -118,17 +118,11 @@ def setup_aws_credentials():
 def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=None, secret_key=None):
     """Invoke SageMaker endpoint using boto3."""
     try:
-        # Ensure credentials are properly decoded if they were URL-encoded
-        if access_key:
-            access_key = urllib.parse.unquote(access_key)
-        if secret_key:
-            secret_key = urllib.parse.unquote(secret_key)
-            
-        # Create boto3 client with explicit credentials
+        # Use environment variables directly with exact names
         session = boto3.Session(
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region
+            aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+            region_name=os.environ['AWS_DEFAULT_REGION']
         )
         sagemaker_runtime = session.client('sagemaker-runtime')
         
@@ -196,7 +190,7 @@ def main():
         # Set up AWS credentials
         aws_access_key_id, aws_secret_access_key, aws_region = setup_aws_credentials()
         
-        print(f"\nUsing SageMaker endpoint: {endpoint_name}")
+        print(f"\nUsing SageMaker endpoint: {os.environ['SAGEMAKER_ENDPOINT_NAME']}")
         print(f"AWS Region: {aws_region}")
         use_sagemaker = True
     else:
@@ -399,7 +393,13 @@ def main():
                 payload = {"inputs": prompt}
                 
                 try:
-                    response = invoke_sagemaker_endpoint(endpoint_name, payload, aws_region, aws_access_key_id, aws_secret_access_key)
+                    response = invoke_sagemaker_endpoint(
+                        os.environ['SAGEMAKER_ENDPOINT_NAME'],
+                        payload,
+                        aws_region,
+                        aws_access_key_id,
+                        aws_secret_access_key
+                    )
                     # Handle different response formats
                     if isinstance(response, list) and response:
                         text = response[0].get("generated_text", "")
