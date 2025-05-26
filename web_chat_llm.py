@@ -8,13 +8,14 @@ import argparse
 import os
 import json
 import urllib.parse
+import boto3
+import botocore
 
 # Essential imports needed for both local and SageMaker modes
 try:
     import gradio as gr
     import pandas as pd
     from PyPDF2 import PdfReader
-    import boto3
 except ImportError as e:
     print(f"Error: Required library not found: {e}", file=sys.stderr)
     sys.exit(1)
@@ -118,21 +119,28 @@ def setup_aws_credentials():
 def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=None, secret_key=None):
     """Invoke SageMaker endpoint using boto3."""
     try:
-        # Use environment variables directly with exact names
-        session = boto3.Session(
-            aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-            region_name=os.environ['AWS_DEFAULT_REGION']
+        # Configure boto3 with explicit credentials
+        boto3.setup_default_session(
+            aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'].strip(),
+            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'].strip(),
+            region_name=os.environ['AWS_DEFAULT_REGION'].strip()
         )
-        sagemaker_runtime = session.client('sagemaker-runtime')
+        
+        # Create client using the default session
+        sagemaker_runtime = boto3.client('sagemaker-runtime')
         
         # Convert payload to JSON string
         payload_json = json.dumps(payload)
         
-        # Invoke endpoint
+        # Print request details for debugging (without sensitive info)
+        print(f"Making request to endpoint: {endpoint_name}", file=sys.stderr)
+        print(f"Region: {os.environ['AWS_DEFAULT_REGION']}", file=sys.stderr)
+        
+        # Invoke endpoint with explicit content type
         response = sagemaker_runtime.invoke_endpoint(
             EndpointName=endpoint_name,
             ContentType='application/json',
+            Accept='application/json',
             Body=payload_json
         )
         
@@ -140,6 +148,14 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         response_body = response['Body'].read().decode('utf-8')
         return json.loads(response_body)
         
+    except botocore.exceptions.ClientError as e:
+        error_code = e.response['Error']['Code']
+        error_message = e.response['Error']['Message']
+        print(f"AWS Error ({error_code}): {error_message}", file=sys.stderr)
+        if error_code == 'InvalidSignatureException':
+            print("This usually means there's an issue with the AWS credentials or their format.", file=sys.stderr)
+            print("Please verify that the AWS credentials are correct and properly formatted.", file=sys.stderr)
+        raise
     except Exception as e:
         print(f"Error calling SageMaker endpoint: {str(e)}", file=sys.stderr)
         raise
@@ -187,11 +203,21 @@ def main():
         parser.error("--model is required when not using a SageMaker endpoint")
 
     if endpoint_name:
-        # Set up AWS credentials
-        aws_access_key_id, aws_secret_access_key, aws_region = setup_aws_credentials()
+        # Verify AWS credentials are present and not empty
+        required_vars = {
+            'AWS_ACCESS_KEY_ID': os.environ.get('AWS_ACCESS_KEY_ID', '').strip(),
+            'AWS_SECRET_ACCESS_KEY': os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip(),
+            'AWS_DEFAULT_REGION': os.environ.get('AWS_DEFAULT_REGION', '').strip(),
+            'SAGEMAKER_ENDPOINT_NAME': os.environ.get('SAGEMAKER_ENDPOINT_NAME', '').strip()
+        }
         
-        print(f"\nUsing SageMaker endpoint: {os.environ['SAGEMAKER_ENDPOINT_NAME']}")
-        print(f"AWS Region: {aws_region}")
+        missing_vars = [var for var, value in required_vars.items() if not value]
+        if missing_vars:
+            print(f"Error: Missing or empty environment variables: {', '.join(missing_vars)}", file=sys.stderr)
+            sys.exit(1)
+            
+        print(f"\nUsing SageMaker endpoint: {required_vars['SAGEMAKER_ENDPOINT_NAME']}")
+        print(f"AWS Region: {required_vars['AWS_DEFAULT_REGION']}")
         use_sagemaker = True
     else:
         use_sagemaker = False
@@ -396,9 +422,9 @@ def main():
                     response = invoke_sagemaker_endpoint(
                         os.environ['SAGEMAKER_ENDPOINT_NAME'],
                         payload,
-                        aws_region,
-                        aws_access_key_id,
-                        aws_secret_access_key
+                        os.environ['AWS_DEFAULT_REGION'],
+                        os.environ['AWS_ACCESS_KEY_ID'],
+                        os.environ['AWS_SECRET_ACCESS_KEY']
                     )
                     # Handle different response formats
                     if isinstance(response, list) and response:
