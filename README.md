@@ -35,7 +35,7 @@
 A simple, open-source chat interface for local models via Hugging Face Transformers (demonstrated with LLaMA models, but compatible with any Transformers model). Includes:
 
 - **CLI**: `chat_llama.py`
-- **Web UI**: `web_chat_llama.py` (built with Gradio)
+- **Web UI**: `web_chat_llm.py` (built with Gradio)
 
 ## Features
 
@@ -101,7 +101,7 @@ python chat_llama.py \
 ### Web Chat Interface
 
 ```bash
-python web_chat_llama.py \
+python web_chat_llm.py \
   --model <MODEL_ID_OR_PATH> \
   [--token <YOUR_TOKEN>] \
   [--device cpu|cuda|mps] \
@@ -127,12 +127,12 @@ You can route inference calls to a deployed AWS SageMaker endpoint instead of lo
    Option 1 - Using environment variable:
    ```bash
    export SAGEMAKER_ENDPOINT_NAME="your_sagemaker_endpoint_name"
-   python web_chat_llama.py --port 7860
+   python web_chat_llm.py --port 7860
    ```
 
    Option 2 - Using command line flag:
    ```bash
-   python web_chat_llama.py \
+   python web_chat_llm.py \
      --sagemaker-endpoint-name your_sagemaker_endpoint_name \
      --port 7860
    ```
@@ -184,7 +184,7 @@ You can optionally store and synchronize your model weights using AWS S3. This i
    - Download-only (load from S3 into a local folder, default: `models/<prefix>`):
 
      ```bash
-     python web_chat_llama.py \
+     python web_chat_llm.py \
        --s3-model-prefix <YOUR_S3_MODEL_PREFIX> \
        [--download-dir <LOCAL_DIR>] \
        [--device cpu|cuda|mps] \
@@ -194,7 +194,7 @@ You can optionally store and synchronize your model weights using AWS S3. This i
    - Upload-only (push a local directory or HF hub model to S3 under `<S3_UPLOAD_PREFIX>`):
 
      ```bash
-     python web_chat_llama.py \
+     python web_chat_llm.py \
        --model <MODEL_ID_OR_LOCAL_PATH> \
        --upload-to-s3 \
        [--s3-upload-prefix <S3_UPLOAD_PREFIX>]
@@ -203,7 +203,7 @@ You can optionally store and synchronize your model weights using AWS S3. This i
    - Sync-if-missing (first check S3, download if present; otherwise upload, then load):
 
      ```bash
-     python web_chat_llama.py \
+     python web_chat_llm.py \
        --model <MODEL_ID_OR_LOCAL_PATH> \
        --s3-model-prefix <YOUR_S3_MODEL_PREFIX> \
        --upload-to-s3 \
@@ -244,7 +244,7 @@ pip install google-auth fastapi uvicorn
 
 4. Run the Web Chat with Google Sign-In support:
 ```bash
-python web_chat_llama_google_signin_test.py \
+python web_chat_llm_google_signin_test.py \
   --model <MODEL_ID_OR_PATH> \
   [--device cpu|cuda|mps] \
   [--port 7860] \
