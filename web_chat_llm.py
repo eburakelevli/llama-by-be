@@ -13,6 +13,7 @@ import botocore
 import datetime
 import hashlib
 import hmac
+import shutil
 
 # Essential imports needed for both local and SageMaker modes
 try:
@@ -128,6 +129,26 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
     import tempfile
     import json
     
+    # Check if AWS CLI is installed and get its version
+    aws_path = shutil.which('aws')
+    if not aws_path:
+        raise RuntimeError(
+            "AWS CLI is not installed. This application requires AWS CLI to be installed. "
+            "Please ensure the Apt buildpack is configured correctly with 'awscli' in Aptfile."
+        )
+    
+    try:
+        # Check AWS CLI version
+        version_result = subprocess.run(
+            ['aws', '--version'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        print(f"AWS CLI version: {version_result.stdout.strip()}", file=sys.stderr)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not determine AWS CLI version: {e}", file=sys.stderr)
+    
     # Set environment variables for AWS CLI
     env = os.environ.copy()
     env['AWS_ACCESS_KEY_ID'] = access_key
@@ -160,7 +181,9 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         
         # Build the AWS CLI command
         cmd = [
-            "aws", "sagemaker-runtime", "invoke-endpoint",
+            aws_path,  # Use the full path to aws
+            "sagemaker-runtime",
+            "invoke-endpoint",
             "--endpoint-name", endpoint_name,
             "--content-type", "application/json",
             "--body", f"fileb://{temp_path}",
@@ -202,6 +225,10 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         raise RuntimeError(error_msg)
     except subprocess.CalledProcessError as e:
         error_msg = f"AWS CLI error: {e}. STDERR: {e.stderr} STDOUT: {e.stdout}"
+        print(f"Error: {error_msg}", file=sys.stderr)
+        raise RuntimeError(error_msg)
+    except FileNotFoundError as e:
+        error_msg = f"AWS CLI not found: {e}. Please ensure AWS CLI is installed via the Apt buildpack."
         print(f"Error: {error_msg}", file=sys.stderr)
         raise RuntimeError(error_msg)
     finally:
