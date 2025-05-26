@@ -120,209 +120,95 @@ def setup_aws_credentials():
     return aws_access_key_id, aws_secret_access_key, aws_region
 
 def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=None, secret_key=None):
-    """Invoke SageMaker endpoint using boto3."""
+    """
+    Invoke a SageMaker endpoint using the AWS CLI directly.
+    This bypasses all signature issues by delegating to the AWS CLI.
+    """
+    import subprocess
+    import tempfile
+    import json
+    
+    # Set environment variables for AWS CLI
+    env = os.environ.copy()
+    env['AWS_ACCESS_KEY_ID'] = access_key
+    env['AWS_SECRET_ACCESS_KEY'] = secret_key
+    env['AWS_DEFAULT_REGION'] = region
+
+    # If AWS_SESSION_TOKEN is in the parent environment, make sure it's passed
+    if 'AWS_SESSION_TOKEN' in os.environ:
+        env['AWS_SESSION_TOKEN'] = os.environ['AWS_SESSION_TOKEN']
+    elif 'AWS_SESSION_TOKEN' in env:
+        del env['AWS_SESSION_TOKEN']
+
+    # Prevent AWS CLI from using profiles or other local AWS config files
+    env['AWS_CONFIG_FILE'] = '/dev/null'
+    env['AWS_SHARED_CREDENTIALS_FILE'] = '/dev/null'
+    
+    if 'AWS_PROFILE' in env:
+        del env['AWS_PROFILE']
+    
+    # Create a temporary file for the payload
+    with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as temp:
+        temp_path = temp.name
+        json.dump(payload, temp)
+    
+    output_path = ""
     try:
-        # Print environment information for debugging
-        print("\nEnvironment Information:", file=sys.stderr)
-        print(f"Python version: {sys.version}", file=sys.stderr)
-        print(f"boto3 version: {boto3.__version__}", file=sys.stderr)
-        print(f"botocore version: {botocore.__version__}", file=sys.stderr)
-        print(f"Running on Heroku: {'DYNO' in os.environ}", file=sys.stderr)
+        # Create a temporary file for output
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as outfile:
+            output_path = outfile.name
         
-        # Get credentials from environment variables only (more reliable on Heroku)
-        aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
-        aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
-        aws_region = os.environ.get('AWS_DEFAULT_REGION', '').strip()
+        # Build the AWS CLI command
+        cmd = [
+            "aws", "sagemaker-runtime", "invoke-endpoint",
+            "--endpoint-name", endpoint_name,
+            "--content-type", "application/json",
+            "--body", f"fileb://{temp_path}",
+            "--cli-read-timeout", "300",
+            "--cli-connect-timeout", "60",
+            output_path 
+        ]
+        
+        print(f"Executing: {' '.join(cmd)}")
+        print(f"CLI Environment AWS_ACCESS_KEY_ID: {env.get('AWS_ACCESS_KEY_ID', 'Not Set')[:4]}...")
+        print(f"CLI Environment AWS_SECRET_ACCESS_KEY: {env.get('AWS_SECRET_ACCESS_KEY', 'Not Set')[:4]}...")
+        print(f"CLI Environment AWS_SESSION_TOKEN: {'Present' if env.get('AWS_SESSION_TOKEN') else 'Not Present'}")
+        print(f"CLI Environment AWS_DEFAULT_REGION: {env.get('AWS_DEFAULT_REGION', 'Not Set')}")
 
-        if not all([aws_access_key, aws_secret_key, aws_region]):
-            raise ValueError("Missing required AWS credentials in environment variables")
-
-        # Print credential information (safely)
-        print("\nCredential Information:", file=sys.stderr)
-        print(f"AWS Access Key ID (first 4 chars): {aws_access_key[:4] if aws_access_key else 'None'}", file=sys.stderr)
-        print(f"AWS Secret Key length: {len(aws_secret_key) if aws_secret_key else 0}", file=sys.stderr)
-        print(f"AWS Region: {aws_region}", file=sys.stderr)
-
-        # Format the payload according to the endpoint's expectations
-        formatted_payload = {
-            "inputs": payload["inputs"],
-            "parameters": {
-                "max_new_tokens": 256,
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "do_sample": True
-            }
-        }
-        
-        # Convert payload to JSON string and calculate SHA256
-        payload_json = json.dumps(formatted_payload)
-        payload_bytes = payload_json.encode('utf-8')
-        content_sha256 = hashlib.sha256(payload_bytes).hexdigest()
-        
-        # Create timestamp for request
-        amz_date = datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
-        date_stamp = amz_date[:8]
-        
-        # Create canonical request
-        canonical_uri = f'/endpoints/{endpoint_name}/invocations'
-        canonical_querystring = ''
-        
-        # Headers must be in alphabetical order and lowercase
-        headers = {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'host': f'runtime.sagemaker.{aws_region}.amazonaws.com',
-            'x-amz-content-sha256': content_sha256,
-            'x-amz-date': amz_date
-        }
-        
-        # Create canonical headers (must be in alphabetical order)
-        canonical_headers = '\n'.join(f'{k}:{v}' for k, v in sorted(headers.items())) + '\n'
-        
-        # Create signed headers (must be in alphabetical order)
-        signed_headers = ';'.join(sorted(headers.keys()))
-        
-        # Create canonical request
-        canonical_request = (
-            'POST\n'
-            f'{canonical_uri}\n'
-            f'{canonical_querystring}\n'
-            f'{canonical_headers}\n'
-            f'{signed_headers}\n'
-            f'{content_sha256}'
+        # Call AWS CLI and capture output
+        result = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=360
         )
         
-        # Calculate hash of canonical request
-        canonical_request_hash = hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()
+        # Read the output file
+        with open(output_path, 'r') as f:
+            response_body = f.read()
         
-        # Create string to sign
-        algorithm = 'AWS4-HMAC-SHA256'
-        credential_scope = f'{date_stamp}/{aws_region}/sagemaker/aws4_request'
-        string_to_sign = (
-            f'{algorithm}\n'
-            f'{amz_date}\n'
-            f'{credential_scope}\n'
-            f'{canonical_request_hash}'
-        )
+        # Parse the response
+        try:
+            response_data = json.loads(response_body)
+            return response_data
+        except json.JSONDecodeError:
+            return {"response": response_body}
         
-        # Calculate signing key
-        def sign(key, msg):
-            return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
-        
-        # Derive signing key
-        k_date = sign(('AWS4' + aws_secret_key).encode('utf-8'), date_stamp)
-        k_region = sign(k_date, aws_region)
-        k_service = sign(k_region, 'sagemaker')
-        k_signing = sign(k_service, 'aws4_request')
-        
-        # Calculate signature
-        signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-        
-        # Create authorization header
-        authorization_header = (
-            f'{algorithm} '
-            f'Credential={aws_access_key}/{credential_scope}, '
-            f'SignedHeaders={signed_headers}, '
-            f'Signature={signature}'
-        )
-        
-        # Add authorization header to headers
-        headers['authorization'] = authorization_header
-        
-        # Print request details for debugging (without sensitive info)
-        print(f"\nMaking request to endpoint: {endpoint_name}", file=sys.stderr)
-        print(f"Region: {aws_region}", file=sys.stderr)
-        print(f"Endpoint URL: https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}", file=sys.stderr)
-        print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
-        print(f"Canonical Request Hash: {canonical_request_hash}", file=sys.stderr)
-        print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
-        print(f"Request headers (without Authorization): {dict((k,v) for k,v in headers.items() if k != 'authorization')}", file=sys.stderr)
-        print(f"Request payload: {payload_json}", file=sys.stderr)
-        print(f"Content SHA256: {content_sha256}", file=sys.stderr)
-        print(f"Date Stamp: {date_stamp}", file=sys.stderr)
-        print(f"AMZ Date: {amz_date}", file=sys.stderr)
-        print(f"Credential Scope: {credential_scope}", file=sys.stderr)
-        print(f"Signed Headers: {signed_headers}", file=sys.stderr)
-        print(f"Signature: {signature}", file=sys.stderr)
-
-        # Make the request using requests library
-        import requests
-        response = requests.post(
-            f'https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}',
-            headers=headers,
-            data=payload_bytes
-        )
-        
-        if response.status_code != 200:
-            error_body = response.text
-            print(f"Error response: {error_body}", file=sys.stderr)
-            if 'Canonical String' in error_body and 'String-to-Sign' in error_body:
-                aws_canonical = error_body.split('Canonical String for this request should have been')[1].split('String-to-Sign')[0].strip()
-                aws_string_to_sign = error_body.split('String-to-Sign should have been')[1].split('}')[0].strip()
-                print("\nAWS Expected Values:", file=sys.stderr)
-                print(f"AWS Expected Canonical String:\n{aws_canonical}", file=sys.stderr)
-                print(f"AWS Expected String-to-Sign:\n{aws_string_to_sign}", file=sys.stderr)
-                print("\nOur Calculated Values:", file=sys.stderr)
-                print(f"Our Canonical String:\n{canonical_request}", file=sys.stderr)
-                print(f"Our String-to-Sign:\n{string_to_sign}", file=sys.stderr)
-                
-                # Compare canonical requests
-                if aws_canonical != canonical_request:
-                    print("\nCanonical Request Differences:", file=sys.stderr)
-                    aws_lines = aws_canonical.split('\n')
-                    our_lines = canonical_request.split('\n')
-                    for i, (aws_line, our_line) in enumerate(zip(aws_lines, our_lines)):
-                        if aws_line != our_line:
-                            print(f"Line {i+1}:", file=sys.stderr)
-                            print(f"AWS:  {aws_line}", file=sys.stderr)
-                            print(f"Ours: {our_line}", file=sys.stderr)
-                
-                # Compare string-to-sign
-                if aws_string_to_sign != string_to_sign:
-                    print("\nString-to-Sign Differences:", file=sys.stderr)
-                    aws_lines = aws_string_to_sign.split('\n')
-                    our_lines = string_to_sign.split('\n')
-                    for i, (aws_line, our_line) in enumerate(zip(aws_lines, our_lines)):
-                        if aws_line != our_line:
-                            print(f"Line {i+1}:", file=sys.stderr)
-                            print(f"AWS:  {aws_line}", file=sys.stderr)
-                            print(f"Ours: {our_line}", file=sys.stderr)
-            
-            raise botocore.exceptions.ClientError(
-                error_response={'Error': {'Code': 'InvokeEndpointError', 'Message': error_body}},
-                operation_name='InvokeEndpoint'
-            )
-
-        # Parse response
-        response_body = response.text
-        print(f"Raw response: {response_body}", file=sys.stderr)
-        return json.loads(response_body)
-
-    except botocore.exceptions.ClientError as e:
-        error_code = e.response['Error']['Code']
-        error_message = e.response['Error']['Message']
-        print(f"\nAWS Error ({error_code}): {error_message}", file=sys.stderr)
-        if error_code == 'InvalidSignatureException':
-            print("\nDetailed credential information:", file=sys.stderr)
-            print(f"Access Key ID: {aws_access_key[:4]}...", file=sys.stderr)
-            print(f"Secret Key length: {len(aws_secret_key)}", file=sys.stderr)
-            print(f"Region: {aws_region}", file=sys.stderr)
-            print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
-            print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
-            print("\nPlease verify:", file=sys.stderr)
-            print("1. AWS credentials are correctly set in Heroku config vars", file=sys.stderr)
-            print("2. The credentials have permissions to invoke the SageMaker endpoint", file=sys.stderr)
-            print("3. The region matches the endpoint's region", file=sys.stderr)
-            print("4. The credentials are properly formatted (no extra spaces or newlines)", file=sys.stderr)
-            print("5. The request headers match the canonical string", file=sys.stderr)
-        elif error_code == 'ModelError':
-            print("\nModel Error Details:", file=sys.stderr)
-            print("This usually means the request format doesn't match what the model expects.", file=sys.stderr)
-            print(f"Request payload was: {payload_json}", file=sys.stderr)
-        raise
-    except Exception as e:
-        print(f"Error calling SageMaker endpoint: {str(e)}", file=sys.stderr)
-        raise
+    except subprocess.TimeoutExpired as e:
+        error_msg = f"AWS CLI timeout after 360 seconds: {e}. STDERR: {e.stderr if hasattr(e, 'stderr') else 'No stderr'} STDOUT: {e.stdout if hasattr(e, 'stdout') else 'No stdout'}"
+        print(f"Error: {error_msg}", file=sys.stderr)
+        raise RuntimeError(error_msg)
+    except subprocess.CalledProcessError as e:
+        error_msg = f"AWS CLI error: {e}. STDERR: {e.stderr} STDOUT: {e.stdout}"
+        print(f"Error: {error_msg}", file=sys.stderr)
+        raise RuntimeError(error_msg)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        if output_path and os.path.exists(output_path):
+            os.unlink(output_path)
 
 def main():
     parser = argparse.ArgumentParser(description="Web chat with a local Hugging Face model via Gradio")
