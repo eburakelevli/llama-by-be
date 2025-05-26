@@ -6,12 +6,14 @@ Supports conversational chat with any compatible model (e.g., LLaMA 4).
 import sys
 import argparse
 import os
+import json
 
 # Essential imports needed for both local and SageMaker modes
 try:
     import gradio as gr
     import pandas as pd
     from PyPDF2 import PdfReader
+    import boto3
 except ImportError as e:
     print(f"Error: Required library not found: {e}", file=sys.stderr)
     sys.exit(1)
@@ -112,6 +114,41 @@ def setup_aws_credentials():
 
     return aws_access_key_id, aws_secret_access_key, aws_region
 
+def invoke_sagemaker_endpoint(endpoint_name, payload, region, access_key, secret_key):
+    """
+    Invoke a SageMaker endpoint using boto3.
+    """
+    try:
+        # Create a SageMaker runtime client
+        runtime = boto3.client(
+            'sagemaker-runtime',
+            region_name=region,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key
+        )
+        
+        # Convert payload to JSON string
+        payload_json = json.dumps(payload)
+        
+        # Invoke the endpoint
+        response = runtime.invoke_endpoint(
+            EndpointName=endpoint_name,
+            ContentType='application/json',
+            Body=payload_json
+        )
+        
+        # Parse the response
+        response_body = response['Body'].read().decode('utf-8')
+        try:
+            return json.loads(response_body)
+        except json.JSONDecodeError:
+            return {"response": response_body}
+            
+    except Exception as e:
+        error_msg = f"Error calling SageMaker endpoint: {str(e)}"
+        print(error_msg, file=sys.stderr)
+        raise RuntimeError(error_msg)
+
 def main():
     parser = argparse.ArgumentParser(description="Web chat with a local Hugging Face model via Gradio")
     parser.add_argument("-m", "--model",
@@ -155,119 +192,8 @@ def main():
         parser.error("--model is required when not using a SageMaker endpoint")
 
     if endpoint_name:
-        try:
-            import boto3
-        except ImportError:
-            print("Error: 'boto3' library not found. Install with 'pip install boto3'", file=sys.stderr)
-            sys.exit(1)
-        import json
-        
         # Set up AWS credentials
         aws_access_key_id, aws_secret_access_key, aws_region = setup_aws_credentials()
-        
-        # Import for subprocess call and temp files
-        import subprocess
-        import tempfile
-        
-        def invoke_sagemaker_endpoint(endpoint_name, payload, region, access_key, secret_key):
-            """
-            Invoke a SageMaker endpoint using the AWS CLI directly.
-            This bypasses all signature issues by delegating to the AWS CLI.
-            """
-            # Set environment variables for AWS CLI
-            # Start with a clean environment or a copy of os.environ, 
-            # then explicitly set what the CLI needs.
-            env = os.environ.copy()
-            env['AWS_ACCESS_KEY_ID'] = access_key
-            env['AWS_SECRET_ACCESS_KEY'] = secret_key
-            env['AWS_DEFAULT_REGION'] = region
-
-            # If AWS_SESSION_TOKEN is in the parent environment, make sure it's passed.
-            # This is crucial if the access_key/secret_key are temporary credentials.
-            if 'AWS_SESSION_TOKEN' in os.environ:
-                env['AWS_SESSION_TOKEN'] = os.environ['AWS_SESSION_TOKEN']
-            elif 'AWS_SESSION_TOKEN' in env: # If it was in the copied env but not explicitly set above
-                del env['AWS_SESSION_TOKEN'] # Remove it if we don't have a fresh one from os.environ
-                                             # and are using long-term keys from input.
-
-            # Attempt to prevent AWS CLI from using profiles or other local AWS config files.
-            # For Darwin (macOS), /dev/null should work.
-            env['AWS_CONFIG_FILE'] = '/dev/null'
-            env['AWS_SHARED_CREDENTIALS_FILE'] = '/dev/null'
-            
-            # Unset AWS_PROFILE to further ensure no profile is used by the CLI.
-            if 'AWS_PROFILE' in env:
-                del env['AWS_PROFILE']
-            
-            # Create a temporary file for the payload
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as temp:
-                temp_path = temp.name
-                json.dump(payload, temp)
-            
-            output_path = "" # Initialize to prevent reference before assignment in finally
-            try:
-                # Create a temporary file for output
-                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as outfile:
-                    output_path = outfile.name
-                
-                # Build the AWS CLI command
-                cmd = [
-                    "aws", "sagemaker-runtime", "invoke-endpoint",
-                    "--endpoint-name", endpoint_name,
-                    "--content-type", "application/json",
-                    "--body", f"fileb://{temp_path}",
-                    "--cli-read-timeout", str(args.cli_read_timeout),
-                    "--cli-connect-timeout", str(args.cli_connect_timeout),
-                    output_path 
-                ]
-                
-                # Remove --output json as it's not needed if specifying outfile path directly
-                # and was causing issues with the outfile argument parsing for invoke-endpoint.
-                # The output to the file is implicitly JSON for this command if not specified otherwise.
-
-                print(f"Executing: {' '.join(cmd)}")
-                print(f"CLI Environment AWS_ACCESS_KEY_ID: {env.get('AWS_ACCESS_KEY_ID', 'Not Set')[:4]}...")
-                print(f"CLI Environment AWS_SECRET_ACCESS_KEY: {env.get('AWS_SECRET_ACCESS_KEY', 'Not Set')[:4]}...")
-                print(f"CLI Environment AWS_SESSION_TOKEN: {'Present' if env.get('AWS_SESSION_TOKEN') else 'Not Present'}")
-                print(f"CLI Environment AWS_DEFAULT_REGION: {env.get('AWS_DEFAULT_REGION', 'Not Set')}")
-                print(f"CLI Environment AWS_CONFIG_FILE: {env.get('AWS_CONFIG_FILE')}")
-                print(f"CLI Environment AWS_SHARED_CREDENTIALS_FILE: {env.get('AWS_SHARED_CREDENTIALS_FILE')}")
-                print(f"CLI Environment AWS_PROFILE: {env.get('AWS_PROFILE', 'Not Set')}")
-
-                # Call AWS CLI and capture output
-                result = subprocess.run(
-                    cmd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=args.subprocess_timeout
-                )
-                
-                # Read the output file
-                with open(output_path, 'r') as f:
-                    response_body = f.read()
-                
-                # Parse the response
-                try:
-                    response_data = json.loads(response_body)
-                    return response_data
-                except json.JSONDecodeError:
-                    return {"response": response_body}
-                
-            except subprocess.TimeoutExpired as e:
-                error_msg = f"AWS CLI timeout after {args.subprocess_timeout} seconds: {e}. STDERR: {e.stderr if hasattr(e, 'stderr') else 'No stderr'} STDOUT: {e.stdout if hasattr(e, 'stdout') else 'No stdout'}"
-                print(f"Error: {error_msg}", file=sys.stderr)
-                raise RuntimeError(error_msg)
-            except subprocess.CalledProcessError as e:
-                error_msg = f"AWS CLI error: {e}. STDERR: {e.stderr} STDOUT: {e.stdout}"
-                print(f"Error: {error_msg}", file=sys.stderr)
-                raise RuntimeError(error_msg)
-            finally:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                if output_path and os.path.exists(output_path):
-                    os.unlink(output_path)
         
         print(f"\nUsing SageMaker endpoint: {endpoint_name}")
         print(f"AWS Region: {aws_region}")
