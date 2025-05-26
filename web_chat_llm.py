@@ -167,7 +167,7 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         canonical_uri = f'/endpoints/{endpoint_name}/invocations'
         canonical_querystring = ''
         
-        # Headers must be in alphabetical order
+        # Headers must be in alphabetical order and lowercase
         headers = {
             'accept': 'application/json',
             'content-type': 'application/json',
@@ -192,6 +192,9 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             f'{content_sha256}'
         )
         
+        # Calculate hash of canonical request
+        canonical_request_hash = hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()
+        
         # Create string to sign
         algorithm = 'AWS4-HMAC-SHA256'
         credential_scope = f'{date_stamp}/{aws_region}/sagemaker/aws4_request'
@@ -199,13 +202,14 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             f'{algorithm}\n'
             f'{amz_date}\n'
             f'{credential_scope}\n'
-            f'{hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()}'
+            f'{canonical_request_hash}'
         )
         
         # Calculate signing key
         def sign(key, msg):
             return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
         
+        # Derive signing key
         k_date = sign(('AWS4' + aws_secret_key).encode('utf-8'), date_stamp)
         k_region = sign(k_date, aws_region)
         k_service = sign(k_region, 'sagemaker')
@@ -230,6 +234,7 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         print(f"Region: {aws_region}", file=sys.stderr)
         print(f"Endpoint URL: https://runtime.sagemaker.{aws_region}.amazonaws.com{canonical_uri}", file=sys.stderr)
         print(f"Canonical Request:\n{canonical_request}", file=sys.stderr)
+        print(f"Canonical Request Hash: {canonical_request_hash}", file=sys.stderr)
         print(f"String to Sign:\n{string_to_sign}", file=sys.stderr)
         print(f"Request headers (without Authorization): {dict((k,v) for k,v in headers.items() if k != 'authorization')}", file=sys.stderr)
         print(f"Request payload: {payload_json}", file=sys.stderr)
@@ -238,6 +243,7 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
         print(f"AMZ Date: {amz_date}", file=sys.stderr)
         print(f"Credential Scope: {credential_scope}", file=sys.stderr)
         print(f"Signed Headers: {signed_headers}", file=sys.stderr)
+        print(f"Signature: {signature}", file=sys.stderr)
 
         # Make the request using requests library
         import requests
@@ -251,12 +257,37 @@ def invoke_sagemaker_endpoint(endpoint_name, payload, region=None, access_key=No
             error_body = response.text
             print(f"Error response: {error_body}", file=sys.stderr)
             if 'Canonical String' in error_body and 'String-to-Sign' in error_body:
+                aws_canonical = error_body.split('Canonical String for this request should have been')[1].split('String-to-Sign')[0].strip()
+                aws_string_to_sign = error_body.split('String-to-Sign should have been')[1].split('}')[0].strip()
                 print("\nAWS Expected Values:", file=sys.stderr)
-                print(f"AWS Expected Canonical String:\n{error_body.split('Canonical String for this request should have been')[1].split('String-to-Sign')[0].strip()}", file=sys.stderr)
-                print(f"AWS Expected String-to-Sign:\n{error_body.split('String-to-Sign should have been')[1].split('}')[0].strip()}", file=sys.stderr)
+                print(f"AWS Expected Canonical String:\n{aws_canonical}", file=sys.stderr)
+                print(f"AWS Expected String-to-Sign:\n{aws_string_to_sign}", file=sys.stderr)
                 print("\nOur Calculated Values:", file=sys.stderr)
                 print(f"Our Canonical String:\n{canonical_request}", file=sys.stderr)
                 print(f"Our String-to-Sign:\n{string_to_sign}", file=sys.stderr)
+                
+                # Compare canonical requests
+                if aws_canonical != canonical_request:
+                    print("\nCanonical Request Differences:", file=sys.stderr)
+                    aws_lines = aws_canonical.split('\n')
+                    our_lines = canonical_request.split('\n')
+                    for i, (aws_line, our_line) in enumerate(zip(aws_lines, our_lines)):
+                        if aws_line != our_line:
+                            print(f"Line {i+1}:", file=sys.stderr)
+                            print(f"AWS:  {aws_line}", file=sys.stderr)
+                            print(f"Ours: {our_line}", file=sys.stderr)
+                
+                # Compare string-to-sign
+                if aws_string_to_sign != string_to_sign:
+                    print("\nString-to-Sign Differences:", file=sys.stderr)
+                    aws_lines = aws_string_to_sign.split('\n')
+                    our_lines = string_to_sign.split('\n')
+                    for i, (aws_line, our_line) in enumerate(zip(aws_lines, our_lines)):
+                        if aws_line != our_line:
+                            print(f"Line {i+1}:", file=sys.stderr)
+                            print(f"AWS:  {aws_line}", file=sys.stderr)
+                            print(f"Ours: {our_line}", file=sys.stderr)
+            
             raise botocore.exceptions.ClientError(
                 error_response={'Error': {'Code': 'InvokeEndpointError', 'Message': error_body}},
                 operation_name='InvokeEndpoint'
